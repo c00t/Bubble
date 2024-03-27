@@ -1,10 +1,30 @@
-# Monorepo Template
+# Bubble
+
+Bubble is a game engine written in Rust. It is designed to be a complex engine,
+which use many features I want to try in Rust&game engine. It can't be used in production.
+
+Bubble will be developed with a sample galgame named "Gigolo".
+So some features will be implemented first,
+such as ragdoll, dynamic simulation(fluid, cloth, hair, rigid body),
+advanced non-photo-realistic rendering...
+
+Also, different from other game engines,
+Bubble will regard both mobile and desktop as tier-0 target platforms.
+
+## Features
+
+- [ ] ECS
+- [ ] Dynamic Simulation
+- [ ] Advanced Rendering
+
+## Monorepo Usage Guide
 
 Use Josh-Proxy & Git Branchless as tools.
 
-## Josh-Proxy
+### Josh-Proxy
 
-We use josh proxy for sub project management, you can run josh proxy with the following command:
+We use josh proxy for sub project management,
+you can run josh proxy with the following command:
 
 ```powershell
 docker run `
@@ -22,19 +42,21 @@ docker run `
 joshproject/josh-proxy:latest | Out-Null `
 ```
 
-then clone sub project using josh proxy:
+Then clone sub project using josh proxy:
 
 ```powershell
-git clone http://localhost:8000/c00t/monorepo-template.git:workspace=project-beta.git project-beta
+git clone `
+http://localhost:8000/c00t/monorepo-template.git:workspace=project-beta.git `
+project-beta `
 ```
 
-Be Careful! you should use `git joshsync origin HEAD` to sync your local repo,
+Be Careful! You should use `git joshsync origin HEAD` to sync your local repo,
 josh proxy's cache and remote origin(when modify `workspace.josh`).
 When using git branchless, there is also a `git sync` command,
 its usage is to pull main branch then rebase your
 local stack to main. It can't be used as `git push` etc. to push commits to remote.
 
-## Git Branchless
+### Git Branchless
 
 Josh Proxy and Git Branchless can coexist,
 only use git branchless for your local usage.
