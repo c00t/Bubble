@@ -1,0 +1,62 @@
+omit_targets = []
+# extra files needed by target build, like files not inside /srcs files
+# even though with `precise_srcs` enabled, this option may still be needed
+extra_srcs = []
+omit_srcs = []
+rustc_flags = []
+cfgs = []
+features = []
+omit_features = []
+extra_deps = []
+omit_deps = []
+# target need Cargo env to build
+# it's used by build scripts or target itself?
+#
+# test.rs or build.rs will read Cargo Env usually,
+#
+# for target, maybe `env!("Cargo")`, it will replace varible with compiler built in
+# then static bundle into binary
+# all cargo command will run with these cargo envs,
+#
+# so it's a attribute should be set if test/build script/target need cargo env?
+cargo_env = false
+
+[env]
+
+[[buildscript]]
+# pipe build scirpt output to target's rustc command line,
+# like `cargo:rustc-cfg=has_aarch_simd`
+# [buildscript.rustc_flags]
+#
+# build script will gen files, such as to `OUT_DIR/foo.rs`
+# [buildscript.gen_srcs]
+# 
+# ---
+# for cxx library usage, a detail example is: 
+# [ring fixups.toml](https://github.com/facebook/buck2/blob/main/shim/third-party/rust/fixups/ring/fixups.toml)
+# reindeer will create cxx target for this crate and add deps to them 
+#
+# build script will build a c/cxx library to link
+# only work if the sources are vendored or from http_archive
+# [buildscript.cxx_library]
+# name = "foo"
+# srcs = ["foo.c", "bar.c"]
+# headers = ["foo.h", "bar.h"]
+# exclude = ["coo.c", "doo.c"]
+# include_paths = ["include", "include2"]
+# compiler_flags = ["-Wno-error"]
+# fixup_include_paths = ["include"]
+# 
+# build script will add prebuilt object files to link
+# [buildscript.pre_built_cxx_library]
+# name = "foo"
+# static_libs = ["pregenerated/libfoo.obj"] or ["pregenerated/foo.o"]
+#
+# unresolved build script
+# [buildscript.unresolved]
+# or
+# unresolved = 'Unresolved build script at vendor\num-rational-0.4.1\build.rs.'
+
+[extra_mapped_srcs]
+
+[platform_fixup]

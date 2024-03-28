@@ -1,0 +1,11 @@
+load("//third-party/macros:subdir_glob.bzl", "subdir_glob")
+prebuilt_cxx_library(
+  name = "eigen3",
+  header_only = True,
+  header_namespace = "Eigen",
+  exported_headers = subdir_glob([
+    ("Eigen", "*"),
+    ("Eigen", "src/**/*.h"),
+  ]), 
+  visibility = ["PUBLIC"],
+)
