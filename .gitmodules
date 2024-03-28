@@ -1,0 +1,6 @@
+[submodule "prelude/buck2-prelude"]
+	path = prelude/buck2-prelude
+	url = https://github.com/facebook/buck2-prelude.git
+[submodule "prelude/prelude"]
+	path = prelude/prelude
+	url = https://github.com/c00t/buck2-prelude.git
