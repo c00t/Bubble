@@ -37,11 +37,13 @@ include_top_level = true
 # at build time.
 # [vendor]
 
-# Exclude files listed in the .gitignore in this directory
-gitignore_checksum_exclude = [".gitignore"]
-# Additional globs to ignore (prefer .gitignore for consistentcy with source
-# control)
-checksum_exclude = []
+vendor = false
+
+# # Exclude files listed in the .gitignore in this directory
+# gitignore_checksum_exclude = [".gitignore"]
+# # Additional globs to ignore (prefer .gitignore for consistentcy with source
+# # control)
+# checksum_exclude = []
 
 # Configuration for rustsec auditing
 [audit]

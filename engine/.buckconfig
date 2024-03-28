@@ -1,7 +1,7 @@
 [repositories]
 root = .
-# use vendored prelude for now
-prelude = prelude/prelude
+# use vendored meta's buck2-prelude for now, there is a bug, can't use two prelude inside same dir, prelude should fully self-contained.
+prelude = prelude/self-prelude
 toolchains = toolchains
 none = none
 
@@ -13,6 +13,9 @@ buck = none
 
 [parser]
 target_platform_detector_spec = target:root//...->toolchains//:default
+
+[project]
+ignore = ".git"
 
 [rust]
 default_edition = 2021
