@@ -13,5 +13,6 @@ path = "top/main.rs"
 
 [dependencies]
 rustversion = "1.0"
+inventory = "0.3"
 
 [patch.crates-io]

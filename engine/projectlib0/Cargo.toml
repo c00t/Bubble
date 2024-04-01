@@ -1,0 +1,6 @@
+[workspace]
+members = ["foundation", "app", "static_plugin", "dynamic_plugin"]
+resolver = "2"
+
+[workspace.dependencies]
+inventory = "0.3"

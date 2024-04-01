@@ -1,0 +1,67 @@
+rust_library(
+    name = "foundation",
+    edition = "2021",
+    srcs = glob(
+        ["foundation/src/**/*.rs"],
+    ),
+    deps = [
+      "//third-party/rust:inventory",
+    ],
+    visibility = [
+      ":app",
+    ],
+)
+
+rust_library(
+    name = "static_plugin",
+    srcs = glob(
+        ["static_plugin/src/**/*.rs"],
+    ),
+    deps = [
+      ":foundation",
+      "//third-party/rust:inventory"
+    ],
+    visibility = [
+      ":app",
+    ],
+#   preferred_linkage = "shared",
+)
+
+rust_library(
+    name = "static_plugin_lib",
+    srcs = glob(
+        ["static_plugin/src/**/*.rs"],
+    ),
+    deps = [
+      ":foundation",
+      "//third-party/rust:inventory"
+    ],
+    visibility = [
+      ":app",
+    ],
+    rustc_flags = [
+      "--crate-type=staticlib",
+    ],
+#   preferred_linkage = "shared",
+)
+
+rust_binary(
+    name = "app",
+    srcs = glob(
+      ["app/src/**/*.rs"],
+    ),
+#   rustc_flags = [
+#     "--extern=static_plugin=$(location :static_plugin)",
+#     "-lstatic:+whole-archive=$(location :static_plugin_lib)",
+#   ],
+#   linker_flags = [
+#     "$(location :static_plugin_lib)",
+#     "/WHOLEARCHIVE:static_plugin_lib",
+#   ],
+#   link_style = "static",
+    deps = [
+      ":static_plugin",
+      ":foundation",
+      "//third-party/rust:inventory",
+    ],
+)

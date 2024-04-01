@@ -3,21 +3,35 @@
 version = 3
 
 [[package]]
+name = "app"
+version = "0.1.0"
+dependencies = [
+ "foundation",
+ "inventory",
+ "static_plugin",
+]
+
+[[package]]
+name = "dynamic_plugin"
+version = "0.1.0"
+
+[[package]]
+name = "foundation"
+version = "0.1.0"
+dependencies = [
+ "inventory",
+]
+
+[[package]]
 name = "inventory"
 version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f958d3d68f4167080a18141e10381e7634563984a537f2a49a30fd8e53ac5767"
 
 [[package]]
-name = "rust-third-party"
-version = "0.0.0"
+name = "static_plugin"
+version = "0.1.0"
 dependencies = [
+ "foundation",
  "inventory",
- "rustversion",
 ]
-
-[[package]]
-name = "rustversion"
-version = "1.0.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ffc183a10b4478d04cbbbfc96d0873219d962dd5accaff2ffbd4ceb7df837f4"
