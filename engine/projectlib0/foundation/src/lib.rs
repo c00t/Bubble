@@ -1,3 +1,5 @@
+use linkme::distributed_slice;
+
 pub struct Plugin {
     pub name: &'static str,
     pub version: &'static str,
@@ -23,3 +25,6 @@ inventory::submit! {
 fn inside_lib_fn(x: i32) -> i32 {
     x + 1
 }
+
+#[distributed_slice]
+pub static PLUGINS: [Plugin];

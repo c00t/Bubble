@@ -32,6 +32,122 @@ cargo.rust_library(
     visibility = [],
 )
 
+alias(
+    name = "linkme",
+    actual = ":linkme-0.3.25",
+    visibility = ["PUBLIC"],
+)
+
+http_archive(
+    name = "linkme-0.3.25.crate",
+    sha256 = "bb2cfee0de9bd869589fb9a015e155946d1be5ff415cb844c2caccc6cc4b5db9",
+    strip_prefix = "linkme-0.3.25",
+    urls = ["https://crates.io/api/v1/crates/linkme/0.3.25/download"],
+    visibility = [],
+)
+
+cargo.rust_library(
+    name = "linkme-0.3.25",
+    srcs = [":linkme-0.3.25.crate"],
+    crate = "linkme",
+    crate_root = "linkme-0.3.25.crate/src/lib.rs",
+    edition = "2021",
+    visibility = [],
+    deps = [":linkme-impl-0.3.25"],
+)
+
+http_archive(
+    name = "linkme-impl-0.3.25.crate",
+    sha256 = "adf157a4dc5a29b7b464aa8fe7edeff30076e07e13646a1c3874f58477dc99f8",
+    strip_prefix = "linkme-impl-0.3.25",
+    urls = ["https://crates.io/api/v1/crates/linkme-impl/0.3.25/download"],
+    visibility = [],
+)
+
+cargo.rust_library(
+    name = "linkme-impl-0.3.25",
+    srcs = [":linkme-impl-0.3.25.crate"],
+    crate = "linkme_impl",
+    crate_root = "linkme-impl-0.3.25.crate/src/lib.rs",
+    edition = "2021",
+    proc_macro = True,
+    visibility = [],
+    deps = [
+        ":proc-macro2-1.0.79",
+        ":quote-1.0.35",
+        ":syn-2.0.57",
+    ],
+)
+
+http_archive(
+    name = "proc-macro2-1.0.79.crate",
+    sha256 = "e835ff2298f5721608eb1a980ecaee1aef2c132bf95ecc026a11b7bf3c01c02e",
+    strip_prefix = "proc-macro2-1.0.79",
+    urls = ["https://crates.io/api/v1/crates/proc-macro2/1.0.79/download"],
+    visibility = [],
+)
+
+cargo.rust_library(
+    name = "proc-macro2-1.0.79",
+    srcs = [":proc-macro2-1.0.79.crate"],
+    crate = "proc_macro2",
+    crate_root = "proc-macro2-1.0.79.crate/src/lib.rs",
+    edition = "2021",
+    features = [
+        "default",
+        "proc-macro",
+    ],
+    rustc_flags = ["@$(location :proc-macro2-1.0.79-build-script-run[rustc_flags])"],
+    visibility = [],
+    deps = [":unicode-ident-1.0.12"],
+)
+
+cargo.rust_binary(
+    name = "proc-macro2-1.0.79-build-script-build",
+    srcs = [":proc-macro2-1.0.79.crate"],
+    crate = "build_script_build",
+    crate_root = "proc-macro2-1.0.79.crate/build.rs",
+    edition = "2021",
+    features = [
+        "default",
+        "proc-macro",
+    ],
+    visibility = [],
+)
+
+buildscript_run(
+    name = "proc-macro2-1.0.79-build-script-run",
+    package_name = "proc-macro2",
+    buildscript_rule = ":proc-macro2-1.0.79-build-script-build",
+    features = [
+        "default",
+        "proc-macro",
+    ],
+    version = "1.0.79",
+)
+
+http_archive(
+    name = "quote-1.0.35.crate",
+    sha256 = "291ec9ab5efd934aaf503a6466c5d5251535d108ee747472c3977cc5acc868ef",
+    strip_prefix = "quote-1.0.35",
+    urls = ["https://crates.io/api/v1/crates/quote/1.0.35/download"],
+    visibility = [],
+)
+
+cargo.rust_library(
+    name = "quote-1.0.35",
+    srcs = [":quote-1.0.35.crate"],
+    crate = "quote",
+    crate_root = "quote-1.0.35.crate/src/lib.rs",
+    edition = "2018",
+    features = [
+        "default",
+        "proc-macro",
+    ],
+    visibility = [],
+    deps = [":proc-macro2-1.0.79"],
+)
+
 cargo.rust_binary(
     name = "rust-third-party-0.0.0-fake",
     srcs = ["top/main.rs"],
@@ -41,6 +157,7 @@ cargo.rust_binary(
     visibility = [],
     deps = [
         ":inventory-0.3.15",
+        ":linkme-0.3.25",
         ":rustversion-1.0.14",
     ],
 )
@@ -107,4 +224,51 @@ buildscript_run(
     package_name = "rustversion",
     buildscript_rule = ":rustversion-1.0.14-build-script-build",
     version = "1.0.14",
+)
+
+http_archive(
+    name = "syn-2.0.57.crate",
+    sha256 = "11a6ae1e52eb25aab8f3fb9fca13be982a373b8f1157ca14b897a825ba4a2d35",
+    strip_prefix = "syn-2.0.57",
+    urls = ["https://crates.io/api/v1/crates/syn/2.0.57/download"],
+    visibility = [],
+)
+
+cargo.rust_library(
+    name = "syn-2.0.57",
+    srcs = [":syn-2.0.57.crate"],
+    crate = "syn",
+    crate_root = "syn-2.0.57.crate/src/lib.rs",
+    edition = "2021",
+    features = [
+        "clone-impls",
+        "default",
+        "derive",
+        "parsing",
+        "printing",
+        "proc-macro",
+    ],
+    visibility = [],
+    deps = [
+        ":proc-macro2-1.0.79",
+        ":quote-1.0.35",
+        ":unicode-ident-1.0.12",
+    ],
+)
+
+http_archive(
+    name = "unicode-ident-1.0.12.crate",
+    sha256 = "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b",
+    strip_prefix = "unicode-ident-1.0.12",
+    urls = ["https://crates.io/api/v1/crates/unicode-ident/1.0.12/download"],
+    visibility = [],
+)
+
+cargo.rust_library(
+    name = "unicode-ident-1.0.12",
+    srcs = [":unicode-ident-1.0.12.crate"],
+    crate = "unicode_ident",
+    crate_root = "unicode-ident-1.0.12.crate/src/lib.rs",
+    edition = "2018",
+    visibility = [],
 )

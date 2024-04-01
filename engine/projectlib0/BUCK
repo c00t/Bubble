@@ -6,6 +6,7 @@ rust_library(
     ),
     deps = [
       "//third-party/rust:inventory",
+      "//third-party/rust:linkme",
     ],
     visibility = [
       ":app",
@@ -19,7 +20,8 @@ rust_library(
     ),
     deps = [
       ":foundation",
-      "//third-party/rust:inventory"
+      "//third-party/rust:inventory",
+      "//third-party/rust:linkme",
     ],
     visibility = [
       ":app",
@@ -34,7 +36,8 @@ rust_library(
     ),
     deps = [
       ":foundation",
-      "//third-party/rust:inventory"
+      "//third-party/rust:inventory",
+      "//third-party/rust:linkme",
     ],
     visibility = [
       ":app",
@@ -63,5 +66,6 @@ rust_binary(
       ":static_plugin",
       ":foundation",
       "//third-party/rust:inventory",
+      "//third-party/rust:linkme",
     ],
 )
