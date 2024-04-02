@@ -53,14 +53,15 @@ rust_binary(
     srcs = glob(
       ["app/src/**/*.rs"],
     ),
-#   rustc_flags = [
+    rustc_flags = [
 #     "--extern=static_plugin=$(location :static_plugin)",
-#     "-lstatic:+whole-archive=$(location :static_plugin_lib)",
-#   ],
-#   linker_flags = [
-#     "$(location :static_plugin_lib)",
-#     "/WHOLEARCHIVE:static_plugin_lib",
-#   ],
+      "-lstatic:+verbatim,+whole-archive=static_plugin",
+    ],
+    linker_flags = [
+      # for subtargets of rust_library, see @prelude//rust/rust_library.bzl L482-L542
+      "$(location :static_plugin[static])",
+#     "/WHOLEARCHIVE:static_plugin",
+    ],
 #   link_style = "static",
     deps = [
       ":static_plugin",

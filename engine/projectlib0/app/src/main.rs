@@ -1,5 +1,5 @@
 use foundation::{Plugin,PLUGINS};
-extern crate static_plugin;
+// extern crate static_plugin;
 pub fn main() {
     for plugin in inventory::iter::<Plugin> {
         println!("plugin: {}, version: {}", plugin.name, plugin.version);
