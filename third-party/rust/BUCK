@@ -9,6 +9,13 @@ load("@prelude//rust:cargo_buildscript.bzl", "buildscript_run")
 load("@prelude//rust:cargo_package.bzl", "cargo")
 load("//third-party/macros:rust_third_party.bzl", "third_party_rust_cxx_library", "third_party_rust_prebuilt_cxx_library")
 
+git_fetch(
+    name = "linkme-6d487f7c22a50530.git",
+    repo = "https://github.com/dtolnay/linkme.git",
+    rev = "40389c2c7dcb8d47f05f823516fc7adae49d1fa8",
+    visibility = [],
+)
+
 alias(
     name = "inventory",
     actual = ":inventory-0.3.15",
@@ -38,37 +45,21 @@ alias(
     visibility = ["PUBLIC"],
 )
 
-http_archive(
-    name = "linkme-0.3.25.crate",
-    sha256 = "bb2cfee0de9bd869589fb9a015e155946d1be5ff415cb844c2caccc6cc4b5db9",
-    strip_prefix = "linkme-0.3.25",
-    urls = ["https://crates.io/api/v1/crates/linkme/0.3.25/download"],
-    visibility = [],
-)
-
 cargo.rust_library(
     name = "linkme-0.3.25",
-    srcs = [":linkme-0.3.25.crate"],
+    srcs = [":linkme-6d487f7c22a50530.git"],
     crate = "linkme",
-    crate_root = "linkme-0.3.25.crate/src/lib.rs",
+    crate_root = "linkme-6d487f7c22a50530/src/lib.rs",
     edition = "2021",
     visibility = [],
     deps = [":linkme-impl-0.3.25"],
 )
 
-http_archive(
-    name = "linkme-impl-0.3.25.crate",
-    sha256 = "adf157a4dc5a29b7b464aa8fe7edeff30076e07e13646a1c3874f58477dc99f8",
-    strip_prefix = "linkme-impl-0.3.25",
-    urls = ["https://crates.io/api/v1/crates/linkme-impl/0.3.25/download"],
-    visibility = [],
-)
-
 cargo.rust_library(
     name = "linkme-impl-0.3.25",
-    srcs = [":linkme-impl-0.3.25.crate"],
+    srcs = [":linkme-6d487f7c22a50530.git"],
     crate = "linkme_impl",
-    crate_root = "linkme-impl-0.3.25.crate/src/lib.rs",
+    crate_root = "linkme-6d487f7c22a50530/impl/src/lib.rs",
     edition = "2021",
     proc_macro = True,
     visibility = [],

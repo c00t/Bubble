@@ -48,6 +48,15 @@ rust_library(
 #   preferred_linkage = "shared",
 )
 
+genrule(
+    name = "play",
+    out = "play.txt",
+    cmd = "echo play > $OUT",
+    visibility = [
+      "PUBLIC"
+    ],
+)
+
 rust_binary(
     name = "app",
     srcs = glob(
@@ -69,4 +78,37 @@ rust_binary(
       "//third-party/rust:inventory",
       "//third-party/rust:linkme",
     ],
+)
+
+# download eigen and build it
+git_fetch(
+    name = "eigen.git",
+    repo = "https://gitlab.com/libeigen/eigen.git",
+    rev = "86aee3d9c5b0ea73f7854901c1ce216135f1228b",
+    sub_targets = [
+      "Eigen",
+    ],
+)
+
+prebuilt_cxx_library(
+  name = "eigen3",
+  header_only = True,
+  header_namespace = "",
+  exported_headers = [":eigen.git[Eigen]"],
+  visibility = ["PUBLIC"],
+  deps = [
+    ":eigen.git",
+  ],
+)
+
+cxx_binary(
+    name = "eigen3_test",
+    srcs = ["cxx_bin/main.cpp"],
+    link_style = "static",
+    deps = [
+      ":eigen3"
+    ],
+    linker_flags = select({
+      "config//os:windows":["ws2_32.lib","Advapi32.lib","Userenv.lib","ntdll.lib","Bcrypt.lib", "Synchronization.lib"],
+    }),
 )
