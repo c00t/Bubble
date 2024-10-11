@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "bubble_core",
+    "bubble_tasks"
+]
+resolver = "2"
+
+[workspace.dependencies]

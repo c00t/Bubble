@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 inventory = { workspace = true }
 foundation = { path = "../foundation/" }
+linkme = {workspace = true }

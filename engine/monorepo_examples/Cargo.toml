@@ -4,3 +4,4 @@ resolver = "2"
 
 [workspace.dependencies]
 inventory = "0.3"
+linkme = { git = "https://github.com/dtolnay/linkme.git" }
