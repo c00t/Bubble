@@ -16,3 +16,5 @@ target/
 *.pdb
 
 .vscode/settings.json
+
+Cargo.lock

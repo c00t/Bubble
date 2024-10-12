@@ -1,8 +1,7 @@
 [workspace]
-members = [
-    "bubble_core",
-    "bubble_tasks"
-]
+members = ["bubble", "bubble_alloc", "bubble_core", "bubble_tasks"]
 resolver = "2"
 
 [workspace.dependencies]
+bubble-core = { path = "bubble_core", version = "0.1.0" }
+bubble-tasks = { path = "bubble_tasks", version = "0.1.0" }
