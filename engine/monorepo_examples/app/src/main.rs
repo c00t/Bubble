@@ -11,5 +11,4 @@ pub fn main() {
         let x = (plugin.load_func)(42);
         println!("load_fucn(42) = {}", x);
     }
-    let x = 0;
 }
