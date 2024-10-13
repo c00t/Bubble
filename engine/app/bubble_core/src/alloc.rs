@@ -6,15 +6,15 @@ pub(crate) mod dyalloc {
     #[allow(improper_ctypes)]
     #[cfg_attr(
         all(target_os = "windows", not(feature = "custom_alloc_lib")),
-        link(name = "bubble_alloc.dll")
+        link(name = "bubble_alloc.dll", kind = "dylib")
     )]
     #[cfg_attr(
         all(not(target_os = "windows"), not(feature = "custom_alloc_lib")),
-        link(name = "bubble_alloc")
+        link(name = "bubble_alloc", kind = "dylib")
     )]
     #[cfg_attr(
         feature = "custom_alloc_lib",
-        link(name = env!("BUBBLE_ALLOC_LIB"))
+        link(name = env!("BUBBLE_ALLOC_LIB"), kind = "dylib")
     )]
     unsafe extern "C" {
         pub fn alloc(layout: Layout) -> *mut u8;
