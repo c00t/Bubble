@@ -1,5 +1,5 @@
 [workspace]
-members = ["bubble", "bubble_alloc", "bubble_core", "bubble_tasks"]
+members = ["bubble", "bubble_alloc", "bubble_core", "bubble_macros", "bubble_tasks"]
 resolver = "2"
 
 [workspace.dependencies]
