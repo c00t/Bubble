@@ -1,0 +1,8 @@
+[workspace]
+members = ["application", "plugin", "shared"]
+resolver = "2"
+
+[workspace.dependencies]
+# bubble-core = {path="../app/bubble_core", version = "0.1.0"}
+shared = {path = "./shared", version = "0.1.0"}
+bubble-tasks = {path="../app/bubble_tasks", version = "0.1.0"}
