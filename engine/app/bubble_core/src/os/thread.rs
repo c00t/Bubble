@@ -131,7 +131,7 @@ macro_rules! __lazy_static_inner {
                 static mut VALUE: MaybeUninit<&'static $T> = MaybeUninit::uninit();
                 VALUE_ONCE.call_once(|| {
                     unsafe {
-                        VALUE.write($crate::__get_static(
+                        VALUE.write($crate::os::thread::__get_static(
                             &RStr::from_str(std::concat!(std::stringify!($N), std::stringify!($T), std::module_path!())),
                             __initialize
                         ));
