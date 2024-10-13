@@ -1,3 +1,6 @@
 [submodule "prelude/prelude"]
 	path = prelude/self-prelude
 	url = https://github.com/c00t/buck2-prelude.git
+[submodule "third-party/vendor/compio"]
+	path = third-party/vendor/compio
+	url = https://github.com/c00t/compio.git
