@@ -1,0 +1,24 @@
+[package]
+name = "bubble-alloc"
+version = "0.1.0"
+description = "Default allocator for Bubble"
+categories = []
+keywords = []
+authors = ["cupofc0t <cupofc0t@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/c00t/Bubble"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+mimalloc-rust = "0.2.1"
+
+[profile.release]
+strip = true  # Automatically strip symbols from the binary.
+lto = true
+codegen-units = 1
+panic = "abort" # This library will always be a dynamic library.
+
