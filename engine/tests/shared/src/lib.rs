@@ -4,6 +4,9 @@ crate::thread_local! {
     pub static TEST_VAR: std::sync::Mutex<i32> =  std::sync::Mutex::new(0);
 }
 
+pub type StringAlias0 = std::string::String;
+pub type StringAlias1 = String;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct TaskSystemApi {
