@@ -1,51 +1,37 @@
-use downcast_rs::{impl_downcast, Downcast};
+use crate::sync::{Arc, ArcAtomicArcErased, AtomicArc, Guard};
 use rustc_hash::FxHashMap;
+pub use semver::Version;
 use std::{
-    any::Any,
-    sync::{Arc, RwLock},
+    any::{type_name, type_name_of_val, TypeId},
+    ops::Deref,
+    sync::RwLock,
 };
 
 /// Api is used to exposed a collections of functions.
 pub trait Api {
-    fn name(&self) -> &'static str;
-    fn version(&self) -> crate::SemVer;
+    const NAME: &'static str;
+    const VERSION: Version;
 }
 // impl_downcast!(Api);
 
 /// Implementation is used to define a function which can be implemented by a plugin.
 pub trait Implementation {
     fn name(&self) -> &'static str;
-    fn version(&self) -> crate::SemVer;
+    fn version(&self) -> Version;
 }
 
-pub trait ApiRegistryApi: Api {
-    fn add<T: Send + Api + 'static>(&self, api_impl: T);
+struct ApiEntry {
+    /// Arc<AtomicArc<T>> erased to ArcAtomicArcErased
+    inner: ArcAtomicArcErased,
 }
+
+unsafe impl Send for ApiEntry {}
+unsafe impl Sync for ApiEntry {}
 
 /// An api registry that can be used to register api implementations.
 pub struct ApiRegistry {
     // a hash map that maps api types to their implementations
-    apis: RwLock<FxHashMap<&'static str, Arc<dyn Api + Send>>>,
-}
-
-impl Api for ApiRegistry {
-    fn name(&self) -> &'static str {
-        "ApiRegistry"
-    }
-    fn version(&self) -> crate::SemVer {
-        crate::SemVer {
-            major: 0,
-            minor: 1,
-            patch: 0,
-        }
-    }
-}
-
-impl ApiRegistryApi for ApiRegistry {
-    fn add<T: Send + Api + 'static>(&self, api_impl: T) {
-        let mut apis = self.apis.write().unwrap();
-        apis.insert(T::name(&api_impl), Arc::new(api_impl));
-    }
+    apis: RwLock<FxHashMap<(&'static str, Version), ApiEntry>>,
 }
 
 impl ApiRegistry {
@@ -54,19 +40,71 @@ impl ApiRegistry {
             apis: RwLock::new(FxHashMap::default()),
         }
     }
+}
 
-    // The api implementation should be cloneable.
-    // pub fn get<T: Any + Copy>(&self) -> Option<T> {
-    //     // 1. get the type id of the api type
-    //     // 2. lock the hash map
-    //     // 3. get the api implementation from the hash map
-    //     // 4. downcast the api implementation to the api type
-    //     // 5. return the api implementation
-    //     let type_name = type_name::<T>();
-    //     let apis = self.apis.read().unwrap();
-    //     let any = apis.get(type_name)?;
-    //     // use unsafe method to convert to T
-    //     let api = unsafe { *(any.as_ref() as *const _ as *const T) };
-    //     Some(api)
-    // }
+// it's should be handled by proc macro or mbe
+impl Api for ApiRegistry {
+    const NAME: &'static str = "ApiRegistryApi";
+    const VERSION: Version = Version::new(0, 1, 0);
+}
+
+impl ApiRegistryApi for ApiRegistry
+where
+    Self: 'static,
+{
+    fn set<T: 'static + Sync + Api>(&self, api: T) {
+        let id = (T::NAME, T::VERSION);
+        println!("{id:?}");
+        println!("{:?}", type_name::<T>());
+        println!("{:?}", type_name_of_val(&api));
+        // get a ApiEntry first to transform into erased ptr
+        let atomic_arc = Arc::new(AtomicArc::new(api));
+        let erased = unsafe { ArcAtomicArcErased::from_arc(atomic_arc) };
+        let entry = ApiEntry { inner: erased };
+        self.apis.write().unwrap().insert(id, entry);
+    }
+
+    fn remove<T: 'static + Sync + Api>(&self) {
+        todo!()
+    }
+
+    fn get<T: 'static + Sync + Api>(&'static self) -> ApiHandle<T> {
+        // get the raw entry
+        let r_lock = self.apis.read().unwrap();
+        let id = (T::NAME, T::VERSION);
+        println!("{:?}", type_name::<T>());
+        println!("{id:?}");
+        if let Some(raw_entry) = r_lock.get(&id) {
+            ApiHandle(unsafe { ArcAtomicArcErased::ref_into_arc(&raw_entry.inner) })
+        } else {
+            drop(r_lock);
+            let mut w_lock = self.apis.write().unwrap();
+            // if don't have the api, create a new one inside registry
+            let raw_entry = w_lock.entry((T::NAME, T::VERSION)).or_insert({
+                let x =
+                    unsafe { ArcAtomicArcErased::from_arc::<()>(Arc::new(AtomicArc::new(None))) };
+                ApiEntry { inner: x }
+            });
+
+            // convert to api entry
+            ApiHandle(unsafe { ArcAtomicArcErased::ref_into_arc(&raw_entry.inner) })
+        }
+    }
+}
+
+pub struct ApiHandle<T: 'static>(Arc<AtomicArc<T>>);
+
+unsafe impl<T: 'static> Send for ApiHandle<T> {}
+unsafe impl<T: 'static> Sync for ApiHandle<T> {}
+
+impl<T> ApiHandle<T> {
+    pub fn get(&self) -> Option<Guard<T>> {
+        self.0.load()
+    }
+}
+
+pub trait ApiRegistryApi: Api + 'static {
+    fn set<T: 'static + Sync + Api>(&self, api: T);
+    fn remove<T: 'static + Sync + Api>(&self);
+    fn get<T: 'static + Sync + Api>(&'static self) -> ApiHandle<T>;
 }

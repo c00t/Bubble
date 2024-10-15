@@ -3,11 +3,6 @@ pub mod api;
 pub mod dll;
 pub mod os;
 pub mod plugin;
+pub mod sync;
 
-#[repr(C)]
-#[derive(Default, Copy, Clone)]
-pub struct SemVer {
-    pub major: u32,
-    pub minor: u32,
-    pub patch: u32,
-}
+pub use os::thread::{lazy_static, scoped_thread_local, thread_local};
