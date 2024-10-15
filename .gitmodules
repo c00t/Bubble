@@ -4,9 +4,6 @@
 [submodule "third-party/vendor/compio"]
 	path = third-party/vendor/compio
 	url = https://github.com/c00t/compio.git
-[submodule "third-party/vendor/aarc"]
-	path = third-party/vendor/aarc
-	url = https://github.com/c00t/aarc.git
 [submodule "third-party/vendor/fast-smr"]
 	path = third-party/vendor/fast-smr
 	url = https://github.com/c00t/fast-smr
