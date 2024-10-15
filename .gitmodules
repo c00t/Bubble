@@ -7,3 +7,6 @@
 [submodule "third-party/vendor/fast-smr"]
 	path = third-party/vendor/fast-smr
 	url = https://github.com/c00t/fast-smr
+[submodule "third-party/vendor/aarc"]
+	path = third-party/vendor/aarc
+	url = https://github.com/c00t/aarc.git
