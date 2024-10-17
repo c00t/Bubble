@@ -1,3 +1,5 @@
+#![recursion_limit = "128"]
+
 mod singleton_derive;
 
 #[proc_macro_derive(Singleton)]
