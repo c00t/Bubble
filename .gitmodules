@@ -10,3 +10,9 @@
 [submodule "third-party/vendor/aarc"]
 	path = third-party/vendor/aarc
 	url = https://github.com/c00t/aarc.git
+[submodule "third-party/vendor/trait_cast_rs"]
+	path = third-party/vendor/trait_cast_rs
+	url = https://github.com/c00t/trait_cast_rs.git
+[submodule "third-party/vendor/async-ffi"]
+	path = third-party/vendor/async-ffi
+	url = https://github.com/c00t/async-ffi.git
