@@ -9,3 +9,4 @@ dlopen2 = "0.7.0"
 shared = {workspace = true}
 bubble-tasks = {workspace = true}
 async-ffi = { version = "0.5.0", features = ["macros"] }
+futures-util = "0.3.31"

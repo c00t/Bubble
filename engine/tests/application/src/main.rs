@@ -2,14 +2,14 @@ use std::{any::TypeId, num::NonZeroUsize, sync::OnceLock, thread};
 
 use async_ffi::FutureExt;
 use bubble_core::{
-    api::api_registry_api::{ApiRegistry, ApiRegistryApi, ApiRegistryRef},
+    api::api_registry_api::{AnyApiHandle, ApiHandle, ApiRegistry, ApiRegistryApi, ApiRegistryRef},
     os::{thread::Context, SysThreadId},
     sync::AtomicArc,
 };
 use bubble_tasks::{dispatcher::Dispatcher, runtime::Runtime};
 use dlopen2::wrapper::{Container, WrapperApi};
-use shared as sd;
 use shared::TaskSystem;
+use shared::{self as sd, TaskSystemApi};
 
 #[derive(WrapperApi)]
 pub struct PluginApi {
@@ -58,6 +58,8 @@ pub fn test_bubble_tasks(container: &std::sync::Arc<Container<PluginApi>>) {
     println!("(SysId)main_thread: {:?}", SysThreadId::current());
     println!("(StdName)main_thread: {:?}", std::thread::current().name());
     let container_clone = container.clone();
+    // meature time
+    let start = std::time::Instant::now();
     let r = TASK_DISPATCHER
         .get()
         .unwrap()
@@ -72,13 +74,23 @@ pub fn test_bubble_tasks(container: &std::sync::Arc<Container<PluginApi>>) {
                 std::thread::current().name()
             );
             println!("(RuntimeName)main_thread(dispatch): {:?}", Runtime::name());
-            let x = container_clone.plugin_task("Cargo.toml".to_string()).await;
+
+            let x =
+                bubble_tasks::runtime::spawn(container_clone.plugin_task("Cargo.toml".to_string()));
+            let (x, _) = futures_util::join!(
+                x,
+                bubble_tasks::runtime::time::sleep(std::time::Duration::from_secs(10))
+            );
             println!("{:?}", x);
         })
         .unwrap();
 
     let runtime = Runtime::new().unwrap();
     let _ = runtime.block_on(r);
+    println!(
+        "test_bubble_tasks time: {:?}, it's should be 10s",
+        start.elapsed()
+    );
 }
 
 pub fn test_typeid(container: &Container<PluginApi>) {
@@ -392,6 +404,21 @@ pub fn doc_reload_plugin_ptr() {
     //                                                 drop delayed by guard in plugin
 }
 
+pub fn test_check_strong_count() {
+    let api_registry_api: Box<dyn ApiRegistryApi> = Box::new(ApiRegistryRef {
+        inner: API_REGISTRY.get_or_init(|| ApiRegistry::new()),
+    });
+
+    let task_api: ApiHandle<dyn TaskSystemApi> = api_registry_api
+        .find(shared::constants::NAME, shared::constants::VERSION)
+        .downcast();
+
+    println!(
+        "task_api strong_count: {}",
+        bubble_core::sync::RefCount::strong_count(&task_api)
+    );
+}
+
 static CONTAINER: OnceLock<std::sync::Arc<Container<PluginApi>>> = OnceLock::new();
 static TASK_DISPATCHER: OnceLock<Dispatcher> = OnceLock::new();
 static API_REGISTRY: OnceLock<ApiRegistry> = OnceLock::new();
@@ -422,7 +449,11 @@ fn main() {
         inner: API_REGISTRY.get_or_init(|| ApiRegistry::new()),
     });
 
-    api_registry_api.set(Box::new(_task_system));
+    api_registry_api.set(
+        shared::constants::NAME,
+        shared::constants::VERSION,
+        Box::new(_task_system).into(),
+    );
 
     (container.load_plugin)(&context, &api_registry_api);
 
@@ -442,4 +473,14 @@ fn main() {
     println!("<-TEST3--");
 
     thread::sleep(std::time::Duration::from_secs(10));
+
+    // TEST4
+    println!("--TEST4->");
+    println!("--You should see strong count increase then drop--");
+    for i in 0..50 {
+        println!("<<<");
+        test_check_strong_count();
+        println!("<<<");
+    }
+    println!("<-TEST4--");
 }

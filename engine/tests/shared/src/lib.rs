@@ -1,7 +1,9 @@
 #![feature(ptr_metadata)]
 use async_ffi::FutureExt;
 use bubble_core::api::{unique_id, UniqueId, UniqueTypeId};
+use bubble_core::impl_api;
 use bubble_core::{
+    api,
     api::{Api, Version},
     thread_local,
 };
@@ -29,22 +31,23 @@ unique_id! {
     dyn TaskSystemApi
 }
 
-pub mod task_system_api {
-    use bubble_core::api::Version;
-
-    pub const NAME: &'static str = "TaskSystemApi";
-
-    pub const VERSION: Version = Version::new(0, 0, 1);
-}
+impl_api!(TaskSystem, TaskSystemApi, (0, 1, 0));
 
 pub trait TaskSystemApi {
+    /// Spawn a task on the current thread, and return a handle to it.
+    ///
+    /// The task will be executed on the current thread, and the handle will be returned immediately.
+    /// `bubble_tasks` is a per-core runtime library, so the task will be executed on the current core.
     fn spawn(&self, fut: async_ffi::LocalFfiFuture<()>) -> bubble_tasks::runtime::JoinHandle<()>;
+    /// Dispatch a task to the task system, and return a future to it.
+    ///
+    ///
     fn dispatch(&self, fut: async_ffi::FfiFuture<()>) -> async_ffi::FfiFuture<()>;
     fn dispatch_blocking(
         &self,
         func: Box<dyn FnOnce() -> i32 + Send + 'static>,
     ) -> async_ffi::FfiFuture<i32>;
-    fn shutdown(&self);
+    fn shutdown(self);
 }
 
 impl TaskSystemApi for TaskSystem {
@@ -71,17 +74,7 @@ impl TaskSystemApi for TaskSystem {
         .into_ffi()
     }
 
-    fn shutdown(&self) {
+    fn shutdown(self) {
         todo!()
-    }
-}
-
-impl Api for TaskSystem {
-    fn name(&self) -> &'static str {
-        task_system_api::NAME
-    }
-
-    fn version(&self) -> Version {
-        task_system_api::VERSION
     }
 }

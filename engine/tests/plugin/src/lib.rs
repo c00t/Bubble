@@ -10,7 +10,7 @@ use std::{
 use async_ffi::{async_ffi, FutureExt};
 use bubble_core::{
     api::{
-        api_registry_api::{ApiHandle, ApiRegistry, ApiRegistryApi, ApiRegistryRef},
+        api_registry_api::{ApiHandle, ApiRegistryApi},
         Api,
     },
     os::{thread::Context, SysThreadId},
@@ -21,18 +21,13 @@ use bubble_tasks::{
     runtime::Runtime,
 };
 use futures_util::{stream::FuturesUnordered, StreamExt};
-use shared::{task_system_api, TaskSystem, TaskSystemApi};
-
-use bubble_core::api::{
-    TraitcastTarget, TraitcastableAny, TraitcastableAnyInfra, TraitcastableAnyInfraExt,
-    TraitcastableTo,
-};
+use shared::TaskSystemApi;
 
 // a singleton plugin
 static PLUGIN: OnceLock<Plugin> = OnceLock::new();
 
 struct Plugin {
-    task_api: ApiHandle<Box<dyn TraitcastableAny>>,
+    task_api: ApiHandle<dyn TaskSystemApi>,
 }
 
 #[no_mangle]
@@ -70,18 +65,28 @@ pub unsafe extern "C" fn test_typeid(ids: (TypeId, TypeId, TypeId)) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn load_plugin(context: &Context, api_registry: &Box<dyn ApiRegistryApi>) {
+pub unsafe extern "C" fn load_plugin(
+    context: &Context,
+    api_registry_api: &Box<dyn ApiRegistryApi>,
+) {
     context.initialize();
 
-    let task_system = api_registry.get(task_system_api::NAME, task_system_api::VERSION);
+    let task_system_api = api_registry_api
+        .find(shared::constants::NAME, shared::constants::VERSION)
+        .downcast();
 
     // let apis: ApiHandle<Box<dyn Api>> = task_system.into();
 
     // let task_guard = apis.get().unwrap();
     // println!("{:p}", task_guard.deref());
 
+    println!(
+        "task_system_api.stront_count({})(at load_plugin)",
+        task_system_api.strong_count()
+    );
+
     PLUGIN.get_or_init(|| Plugin {
-        task_api: task_system,
+        task_api: task_system_api,
     });
 }
 
@@ -89,17 +94,19 @@ pub unsafe extern "C" fn load_plugin(context: &Context, api_registry: &Box<dyn A
 #[no_mangle]
 async fn plugin_task(s: String) -> String {
     let plugin = PLUGIN.get().unwrap();
-    let task_guard = plugin.task_api.get().unwrap();
+    let task_system_api = plugin.task_api.get().unwrap();
     println!(
-        "task_guard.strong_count()(at plugin_task begin): {}",
-        task_guard.strong_count()
+        "task_guard.strong_count()(at plugin_task begin), should be 1: {}",
+        task_system_api.strong_count()
     );
+    // should be 1, because it's the strong count of the inner AtomicArc
+    assert_eq!(task_system_api.strong_count(), 1);
     // get static value
     // let x = api::TEST_INT.get().unwrap();
     // println!("plugin_task: {:?}", x);
     // print thread name
 
-    println!("{:p}", task_guard.deref());
+    println!("{:p}", task_system_api.deref());
     println!(
         "(StdId)plugin_thread(plugin task): {:?}",
         std::thread::current().id()
@@ -109,11 +116,7 @@ async fn plugin_task(s: String) -> String {
         SysThreadId::current()
     );
 
-    println!(
-        "any id:{:?}",
-        TraitcastableAny::type_id(task_guard.as_ref())
-    );
-    let task_system_api: &dyn TaskSystemApi = task_guard.as_ref().downcast_ref().unwrap();
+    // let task_system_api: &dyn TaskSystemApi = task_guard.as_ref().downcast_ref().unwrap();
 
     let x = async {
         println!(
@@ -147,28 +150,21 @@ async fn plugin_task(s: String) -> String {
 
     let x = task_system_api.spawn(x).detach();
 
-    let task_system_api_arc: Arc<_> = (&task_guard).into();
+    let task_system_global_api: ApiHandle<_> = (&task_system_api).into();
     println!(
         "task_system_api_arc.strong_count()(before dispatch): {}",
-        task_system_api_arc.strong_count()
+        task_system_global_api.strong_count()
     );
-    let x = task_system_api.dispatch(
+    let x = task_system_api.spawn(
         async move {
-            // let file = bubble_tasks::fs::File::open("Cargo.toml").await.unwrap();
-            // let (read, buffer) = file
-            //     .read_to_end_at(Vec::with_capacity(1024), 0)
-            //     .await
-            //     .unwrap();
-            // assert_eq!(read, buffer.len());
-            // let buffer = String::from_utf8(buffer).unwrap();
             let mut handles = FuturesUnordered::new();
-            let task_system_api: &dyn TaskSystemApi =
-                task_system_api_arc.as_ref().downcast_ref().unwrap();
+            let global_api = task_system_global_api;
             println!(
-                "task_system_api_arc.strong_count()(in dispatch future): {}",
-                task_system_api_arc.strong_count()
+                "global_api.strong_count()(at dispatch begin): {}",
+                global_api.strong_count()
             );
-            for _ in 0..16 {
+            let task_system_api = global_api.get().unwrap();
+            for i in 0..2 {
                 handles.push(
                     task_system_api.dispatch(
                         async move {
@@ -181,16 +177,26 @@ async fn plugin_task(s: String) -> String {
                             // assert_eq!(read, buffer.len());
                             // print thread id
                             println!(
-                                "(StdId)plugin_thread(loop): {:?}",
+                                "(StdId)plugin_thread(loop{}): {:?}",
+                                i,
                                 std::thread::current().id()
                             );
-                            println!("(SysId)plugin_thread(loop): {:?}", SysThreadId::current());
+                            bubble_tasks::runtime::time::sleep(Duration::from_secs(2)).await;
                             println!(
-                                "(StdName)plugin_thread(loop): {:?}",
+                                "(SysId)plugin_thread(loop{}): {:?}",
+                                i,
+                                SysThreadId::current()
+                            );
+                            println!(
+                                "(StdName)plugin_thread(loop{}): {:?}",
+                                i,
                                 std::thread::current().name()
                             );
-                            println!("(RuntimeName)plugin_thread(loop): {:?}", Runtime::name());
-                            bubble_tasks::runtime::time::sleep(Duration::from_secs(1)).await;
+                            println!(
+                                "(RuntimeName)plugin_thread(loop{}): {:?}",
+                                i,
+                                Runtime::name()
+                            );
                         }
                         .into_ffi(),
                     ),
@@ -201,15 +207,16 @@ async fn plugin_task(s: String) -> String {
             println!("plugin_thread(loop time): {:?}", instant.elapsed());
             "sss".to_string();
         }
-        .into_ffi(),
+        .into_local_ffi(),
     );
-    x.await;
-
+    // drop(task_system_global_api);
     let y = task_system_api.dispatch_blocking(Box::new(|| {
-        std::thread::sleep(Duration::from_secs(3));
+        println!("before dispatch blocking sleep");
+        std::thread::sleep(Duration::from_secs(10));
+        println!("after dispatch blocking sleep");
         1
     }));
-    println!("{}", y.await);
+    println!("{:?}", futures_util::join!(x, y));
 
     "xxx".to_string()
 
