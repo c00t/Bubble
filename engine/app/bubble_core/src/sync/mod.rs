@@ -12,6 +12,10 @@ impl ArcAtomicArcErased {
         std::mem::transmute(arc)
     }
 
+    pub unsafe fn into_arc<T>(this: Self) -> Arc<AtomicArc<T>> {
+        std::mem::transmute(this)
+    }
+
     pub unsafe fn ref_into_arc<T>(this: &Self) -> Arc<AtomicArc<T>> {
         // read mem at this ref
         let len = size_of::<Self>();

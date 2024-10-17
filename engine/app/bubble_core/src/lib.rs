@@ -1,3 +1,7 @@
+#![feature(ptr_metadata)]
+#![feature(trait_upcasting)]
+#![allow(incomplete_features)]
+
 pub mod alloc;
 pub mod api;
 pub mod dll;
