@@ -2,7 +2,7 @@ use std::{any::TypeId, num::NonZeroUsize, sync::OnceLock, thread};
 
 use async_ffi::FutureExt;
 use bubble_core::{
-    api::{ApiRegistry, ApiRegistryApi},
+    api::api_registry_api::{ApiRegistry, ApiRegistryApi, ApiRegistryRef},
     os::{thread::Context, SysThreadId},
     sync::AtomicArc,
 };
@@ -13,7 +13,7 @@ use shared::TaskSystem;
 
 #[derive(WrapperApi)]
 pub struct PluginApi {
-    load_plugin: fn(context: &Context, api_registry: &'static ApiRegistry),
+    load_plugin: fn(context: &Context, api_registry: &Box<dyn ApiRegistryApi>),
     test_dynamic_tls: fn(),
     plugin_task: fn(s: String) -> async_ffi::FfiFuture<String>,
     test_typeid: fn(ids: (TypeId, TypeId, TypeId)),
@@ -414,14 +414,17 @@ fn main() {
         .build()
         .unwrap();
     let _ = TASK_DISPATCHER.set(_dispatcher);
-    let task_api = TaskSystem {
+    let _task_system = TaskSystem {
         dispatcher: TASK_DISPATCHER.get().unwrap(),
     };
-    let api_registry = API_REGISTRY.get_or_init(|| ApiRegistry::new());
 
-    api_registry.set(task_api);
+    let api_registry_api: Box<dyn ApiRegistryApi> = Box::new(ApiRegistryRef {
+        inner: API_REGISTRY.get_or_init(|| ApiRegistry::new()),
+    });
 
-    (container.load_plugin)(&context, &api_registry);
+    api_registry_api.set(Box::new(_task_system));
+
+    (container.load_plugin)(&context, &api_registry_api);
 
     // TEST1
     println!("--TEST1->");
@@ -437,4 +440,6 @@ fn main() {
     println!("--TEST3->");
     test_typeid(&container);
     println!("<-TEST3--");
+
+    thread::sleep(std::time::Duration::from_secs(10));
 }
