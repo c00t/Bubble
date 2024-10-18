@@ -70,7 +70,8 @@ pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let struct_name = &input.ident;
     let api_trait_last_path = &api_trait_path.segments.last().unwrap().ident;
-    let get_api_fn_name = format_ident!("get_{}", snake_case(&api_trait_last_path.to_string()));
+    let register_api_fn_name =
+        format_ident!("register_{}", snake_case(&api_trait_last_path.to_string()));
 
     let expanded = quote! {
         // #[repr(C)]
@@ -84,8 +85,8 @@ pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         impl_api!(#struct_name, #api_trait_last_path, (#version_major, #version_minor, #version_patch));
 
-        pub fn #get_api_fn_name() -> ApiHandle<dyn #api_trait_last_path> {
-            #struct_name::new()
+        pub fn #register_api_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>) -> ApiHandle<dyn #api_trait_last_path> {
+            api_registry_api.get().unwrap().set(constants::NAME,constants::VERSION ,#struct_name::new().into()).downcast()
         }
     };
 
