@@ -9,10 +9,7 @@ use std::{
 
 use async_ffi::{async_ffi, FutureExt};
 use bubble_core::{
-    api::{
-        api_registry_api::{ApiHandle, ApiRegistryApi},
-        Api,
-    },
+    api::prelude::*,
     os::{thread::Context, SysThreadId},
     sync::{Arc, RefCount},
 };
@@ -67,11 +64,12 @@ pub unsafe extern "C" fn test_typeid(ids: (TypeId, TypeId, TypeId)) {
 #[no_mangle]
 pub unsafe extern "C" fn load_plugin(
     context: &Context,
-    api_registry_api: &Box<dyn ApiRegistryApi>,
+    api_registry_api: ApiHandle<dyn ApiRegistryApi>,
 ) {
     context.initialize();
+    let api_guard = api_registry_api.get().unwrap();
 
-    let task_system_api = api_registry_api
+    let task_system_api = api_guard
         .find(shared::constants::NAME, shared::constants::VERSION)
         .downcast();
 

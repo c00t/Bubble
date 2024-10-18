@@ -27,7 +27,7 @@ pub struct TaskSystem {
 }
 
 unique_id! {
-    #[UniqueTypeIdVersion((0,0,1))]
+    #[UniqueTypeIdVersion((0,1,0))]
     dyn TaskSystemApi
 }
 

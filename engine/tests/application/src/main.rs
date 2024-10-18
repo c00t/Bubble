@@ -1,8 +1,9 @@
 use std::{any::TypeId, num::NonZeroUsize, sync::OnceLock, thread};
 
 use async_ffi::FutureExt;
+use bubble_core::api::prelude::*;
 use bubble_core::{
-    api::api_registry_api::{AnyApiHandle, ApiHandle, ApiRegistry, ApiRegistryApi, ApiRegistryRef},
+    api::api_registry_api::get_api_registry_api,
     os::{thread::Context, SysThreadId},
     sync::AtomicArc,
 };
@@ -13,7 +14,7 @@ use shared::{self as sd, TaskSystemApi};
 
 #[derive(WrapperApi)]
 pub struct PluginApi {
-    load_plugin: fn(context: &Context, api_registry: &Box<dyn ApiRegistryApi>),
+    load_plugin: fn(context: &Context, api_registry: ApiHandle<dyn ApiRegistryApi>),
     test_dynamic_tls: fn(),
     plugin_task: fn(s: String) -> async_ffi::FfiFuture<String>,
     test_typeid: fn(ids: (TypeId, TypeId, TypeId)),
@@ -405,9 +406,7 @@ pub fn doc_reload_plugin_ptr() {
 }
 
 pub fn test_check_strong_count() {
-    let api_registry_api: Box<dyn ApiRegistryApi> = Box::new(ApiRegistryRef {
-        inner: API_REGISTRY.get_or_init(|| ApiRegistry::new()),
-    });
+    let api_registry_api = MAIN.get().unwrap().api_registry_api.get().unwrap();
 
     let task_api: ApiHandle<dyn TaskSystemApi> = api_registry_api
         .find(shared::constants::NAME, shared::constants::VERSION)
@@ -421,7 +420,12 @@ pub fn test_check_strong_count() {
 
 static CONTAINER: OnceLock<std::sync::Arc<Container<PluginApi>>> = OnceLock::new();
 static TASK_DISPATCHER: OnceLock<Dispatcher> = OnceLock::new();
-static API_REGISTRY: OnceLock<ApiRegistry> = OnceLock::new();
+
+static MAIN: OnceLock<Main> = OnceLock::new();
+
+pub struct Main {
+    api_registry_api: ApiHandle<dyn ApiRegistryApi>,
+}
 
 fn main() {
     // get current working directory
@@ -445,17 +449,19 @@ fn main() {
         dispatcher: TASK_DISPATCHER.get().unwrap(),
     };
 
-    let api_registry_api: Box<dyn ApiRegistryApi> = Box::new(ApiRegistryRef {
-        inner: API_REGISTRY.get_or_init(|| ApiRegistry::new()),
+    let api_registry_api = get_api_registry_api();
+
+    let _ = MAIN.get_or_init(|| Main {
+        api_registry_api: api_registry_api.clone(),
     });
 
-    api_registry_api.set(
+    api_registry_api.get().unwrap().set(
         shared::constants::NAME,
         shared::constants::VERSION,
         Box::new(_task_system).into(),
     );
-
-    (container.load_plugin)(&context, &api_registry_api);
+    // for each plugin, run load_plugin, pass clone() of ApiHandle<dyn ApiRegistryApi> to it.
+    (container.load_plugin)(&context, api_registry_api.clone());
 
     // TEST1
     println!("--TEST1->");
