@@ -5,3 +5,4 @@ resolver = "2"
 [workspace.dependencies]
 bubble-core = { path = "bubble_core", version = "0.1.0" }
 bubble-tasks = { path = "bubble_tasks", version = "0.1.0" }
+bubble-macros = { path = "bubble_macros", version = "0.1.0" }
