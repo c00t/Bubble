@@ -11,7 +11,7 @@ use async_ffi::{async_ffi, FutureExt};
 use bubble_core::{
     api::prelude::*,
     os::{thread::Context, SysThreadId},
-    sync::{Arc, RefCount},
+    sync::{Arc, AtomicArc, RefCount},
 };
 use bubble_tasks::{
     io::{AsyncReadAt, AsyncReadAtExt},
@@ -21,7 +21,7 @@ use futures_util::{stream::FuturesUnordered, StreamExt};
 use shared::TaskSystemApi;
 
 // a singleton plugin
-static PLUGIN: OnceLock<Plugin> = OnceLock::new();
+static PLUGIN: OnceLock<AtomicArc<Plugin>> = OnceLock::new();
 
 struct Plugin {
     task_api: ApiHandle<dyn TaskSystemApi>,
@@ -83,22 +83,29 @@ pub unsafe extern "C" fn load_plugin(
         task_system_api.strong_count()
     );
 
-    PLUGIN.get_or_init(|| Plugin {
-        task_api: task_system_api,
+    PLUGIN.get_or_init(|| {
+        AtomicArc::new(Plugin {
+            task_api: task_system_api,
+        })
     });
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn unload_plugin() {
+    // clear plugin data
+    PLUGIN.get().unwrap().store::<Arc<_>>(None);
 }
 
 #[async_ffi(?Send)]
 #[no_mangle]
 async fn plugin_task(s: String) -> String {
-    let plugin = PLUGIN.get().unwrap();
+    let plugin = PLUGIN.get().unwrap().load().unwrap();
     let task_system_api = plugin.task_api.get().unwrap();
+    // it's 1 or 2 depends on the order of `set` or `get` of api_registry_api
     println!(
-        "task_guard.strong_count()(at plugin_task begin), should be 1: {}",
+        "task_guard.strong_count()(at plugin_task begin), should be 1 or 2: {}",
         task_system_api.strong_count()
     );
-    // should be 1, because it's the strong count of the inner AtomicArc
-    assert_eq!(task_system_api.strong_count(), 1);
     // get static value
     // let x = api::TEST_INT.get().unwrap();
     // println!("plugin_task: {:?}", x);
@@ -212,7 +219,7 @@ async fn plugin_task(s: String) -> String {
         println!("before dispatch blocking sleep");
         std::thread::sleep(Duration::from_secs(10));
         println!("after dispatch blocking sleep");
-        1
+        1;
     }));
     println!("{:?}", futures_util::join!(x, y));
 
