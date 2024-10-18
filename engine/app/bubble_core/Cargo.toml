@@ -13,6 +13,7 @@ semver = "1.0.23"
 dyntls = { path = "../dyntls" }
 aarc = { path = "../../third-party/vendor/aarc"}
 trait_cast_rs = { path = "../../third-party/vendor/trait_cast_rs/trait_cast_rs"}
+bubble-macros = { workspace = true }
 
 [dev-dependencies]
 dyntls = { path = "../dyntls", features = ["host"]}

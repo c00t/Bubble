@@ -15,7 +15,7 @@ use std::{
     any::{type_name, type_name_of_val},
     marker,
     ops::Deref,
-    sync::RwLock,
+    sync::{OnceLock, RwLock},
 };
 
 use crate::api::{
@@ -23,6 +23,7 @@ use crate::api::{
     TraitcastableAnyInfra, TraitcastableAnyInfraExt, UniqueId, UniqueTypeId,
 };
 use aarc::RefCount;
+use bubble_macros::define_api;
 use rustc_hash::FxHashMap;
 use semver::Version;
 
@@ -198,11 +199,18 @@ pub trait ApiRegistryApi: Api {
     ///
     /// Typically, if you want to register an api, you create a `Box<dyn YourApiTraitName>` or `Box<YourApiStructName>`,
     /// and then use [`AnyApiHandle::from<Box<T>>`] where `T:'static + TraitcastableAny` convert it to `AnyApiHandle`.
+    /// Or if you using #[define_api] to define your api, you can use the public functions exposed as `pub fn get_your_api_trait_name() -> ApiHandle<dyn YourApiTrait>`.
     fn set(&self, name: &'static str, version: Version, api: AnyApiHandle);
     /// Remove an api with specific name and version.
     fn remove(&self, name: &'static str, version: Version);
     /// Find an api with specific name and version.
     fn find(&self, name: &'static str, version: Version) -> AnyApiHandle;
+    /// Clear and shut down the api registry. Currently not implemented.
+    ///
+    /// ## Note
+    ///
+    /// Do we really need it? All memory will be freed when the program exits.
+    fn shutdown(&self);
     fn ref_counts(&self);
 }
 
@@ -216,21 +224,30 @@ unsafe impl Send for ApiEntry {}
 unsafe impl Sync for ApiEntry {}
 
 /// An api registry that can be used to register api implementations.
-pub struct ApiRegistry {
-    // a hash map that maps api types to their implementations
+struct ApiRegistry {
+    // A hash map that maps api types to their implementations
     apis: RwLock<FxHashMap<(&'static str, Version), ApiEntry>>,
 }
 
-crate::impl_api!(ApiRegistryRef, ApiRegistryApi, (0, 1, 0));
+// crate::impl_api!(ApiRegistryRef, ApiRegistryApi, (0, 1, 0));
 
-#[make_trait_castable(Api, ApiRegistryApi)]
-pub struct ApiRegistryRef {
+// #[make_trait_castable(Api, ApiRegistryApi)]
+#[define_api((0,1,0), bubble_core::api::api_registry_api::ApiRegistryApi)]
+struct ApiRegistryRef {
     pub inner: &'static ApiRegistry,
 }
 
-unique_id! {
-    dyn bubble_core::api::api_registry_api::Api;
-    dyn bubble_core::api::api_registry_api::ApiRegistryApi;
+/// It will be managed by the main executable, so no need to use dyntls.
+static API_REGISTRY: OnceLock<ApiRegistry> = OnceLock::new();
+
+impl ApiRegistryRef {
+    fn new() -> ApiHandle<dyn ApiRegistryApi> {
+        let api_registry_api: AnyApiHandle = Box::new(ApiRegistryRef {
+            inner: API_REGISTRY.get_or_init(|| ApiRegistry::new()),
+        })
+        .into();
+        api_registry_api.downcast()
+    }
 }
 
 impl ApiRegistry {
@@ -272,6 +289,8 @@ impl ApiRegistry {
     pub fn ref_counts(&self) {
         // loop through the hash map and print the ref counts
     }
+
+    pub fn shutdown(self) {}
 }
 
 impl ApiRegistryApi for ApiRegistryRef
@@ -291,4 +310,8 @@ where
     }
 
     fn ref_counts(&self) {}
+
+    fn shutdown(&self) {
+        todo!()
+    }
 }

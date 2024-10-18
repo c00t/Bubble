@@ -5,7 +5,21 @@ pub use trait_cast_rs::{
     TraitcastableAnyInfra, TraitcastableAnyInfraExt, TraitcastableTo, UniqueId, UniqueTypeId,
 };
 
+pub use bubble_macros::define_api;
+
 /// Api is used to exposed a collections of functions.
+///
+/// Because that an api or the api struct implementing a specific api trait will be accessed by
+/// multiple plugins, which can use them in a concurrent way, the api struct must be thread-safe.
+/// That's why the api struct must be `Sync`. Normally, you should use them as if it's a `&T`
+/// and implement your api struct using internal mutability.
+///
+/// Also, if your plugin's api is intended to be used by other plugins in concurrent context,
+/// you should consider your usage scenario and use proper synchronization primitives. Through in
+/// Bubble, your api can register statics or thread local data from plugin, you should avoid use them
+/// in your api, it will decrease your performance if you use them heavily. Especially,
+/// if you use a library which use statics or thread local data, you need to vendor them,
+/// and use [`dyntls::thread_local`] or [`dyntls::lazy_static`] instead.
 pub trait Api: Any + Sync {
     // const NAME: &'static str;
     // const VERSION: Version;
@@ -21,6 +35,10 @@ impl<T: Api + ?Sized> Api for Box<T> {
     fn version(&self) -> Version {
         T::version(&self)
     }
+}
+
+unique_id! {
+    dyn bubble_core::api::api_registry_api::Api;
 }
 
 /// Implementation is used to define a function which can be implemented by a plugin.
@@ -73,3 +91,13 @@ macro_rules! impl_api {
 }
 
 pub mod api_registry_api;
+
+pub mod prelude {
+    pub use super::api_registry_api::{AnyApiHandle, ApiHandle, ApiRegistryApi, LocalApiHandle};
+    pub use super::{
+        define_api, make_trait_castable, make_trait_castable_decl, unique_id, Api, Implementation,
+        TraitcastTarget, TraitcastableAny, TraitcastableAnyInfra, TraitcastableAnyInfraExt,
+        TraitcastableTo, UniqueId, UniqueTypeId,
+    };
+    pub use crate::impl_api;
+}
