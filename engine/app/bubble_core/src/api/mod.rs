@@ -1,11 +1,10 @@
+pub use bubble_macros::define_api;
 pub use semver::Version;
 use std::any::Any;
 pub use trait_cast_rs::{
     make_trait_castable, make_trait_castable_decl, unique_id, TraitcastTarget, TraitcastableAny,
     TraitcastableAnyInfra, TraitcastableAnyInfraExt, TraitcastableTo, UniqueId, UniqueTypeId,
 };
-
-pub use bubble_macros::define_api;
 
 /// Api is used to exposed a collections of functions.
 ///
@@ -20,6 +19,10 @@ pub use bubble_macros::define_api;
 /// in your api, it will decrease your performance if you use them heavily. Especially,
 /// if you use a library which use statics or thread local data, you need to vendor them,
 /// and use [`dyntls::thread_local`] or [`dyntls::lazy_static`] instead.
+///
+/// When your api need to clear some resources when the application shutdown, because the api will
+/// hold a static reference to your api, you should implement the [`Api::shutdown`] function
+/// instead of [`Drop`], it will be called when the application shutdown.
 pub trait Api: Any + Sync {
     // const NAME: &'static str;
     // const VERSION: Version;
@@ -69,22 +72,22 @@ pub trait ApiConstant {
 macro_rules! impl_api {
     ($struct_name:ident, $api_name:ident, ($major:expr, $minor:expr,$patch:expr)) => {
         pub mod constants {
+            use super::Version;
             pub const NAME: &'static str = ::std::stringify!($api_name);
-            pub const VERSION: $crate::api::Version =
-                $crate::api::Version::new($major, $minor, $patch);
+            pub const VERSION: self::Version = self::Version::new($major, $minor, $patch);
         }
 
-        impl $crate::api::ApiConstant for $struct_name {
+        impl self::ApiConstant for $struct_name {
             const NAME: &'static str = self::constants::NAME;
-            const VERSION: $crate::api::Version = self::constants::VERSION;
+            const VERSION: self::Version = self::constants::VERSION;
         }
 
-        impl $crate::api::Api for $struct_name {
+        impl self::Api for $struct_name {
             fn name(&self) -> &'static str {
-                <Self as crate::api::ApiConstant>::NAME
+                <Self as self::ApiConstant>::NAME
             }
-            fn version(&self) -> $crate::api::Version {
-                <Self as crate::api::ApiConstant>::VERSION
+            fn version(&self) -> self::Version {
+                <Self as self::ApiConstant>::VERSION
             }
         }
     };
@@ -95,9 +98,9 @@ pub mod api_registry_api;
 pub mod prelude {
     pub use super::api_registry_api::{AnyApiHandle, ApiHandle, ApiRegistryApi, LocalApiHandle};
     pub use super::{
-        define_api, make_trait_castable, make_trait_castable_decl, unique_id, Api, Implementation,
-        TraitcastTarget, TraitcastableAny, TraitcastableAnyInfra, TraitcastableAnyInfraExt,
-        TraitcastableTo, UniqueId, UniqueTypeId,
+        define_api, make_trait_castable, make_trait_castable_decl, unique_id, Api, ApiConstant,
+        Implementation, TraitcastTarget, TraitcastableAny, TraitcastableAnyInfra,
+        TraitcastableAnyInfraExt, TraitcastableTo, UniqueId, UniqueTypeId, Version,
     };
     pub use crate::impl_api;
 }

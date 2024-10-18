@@ -18,17 +18,14 @@ use std::{
     sync::{OnceLock, RwLock},
 };
 
-use crate::api::{
-    make_trait_castable, make_trait_castable_decl, unique_id, TraitcastableAny,
-    TraitcastableAnyInfra, TraitcastableAnyInfraExt, UniqueId, UniqueTypeId,
-};
-use aarc::RefCount;
+use super::prelude::*;
+
 use bubble_macros::define_api;
 use rustc_hash::FxHashMap;
-use semver::Version;
+use thiserror::Error;
 
 use super::Api;
-use crate::sync::{Arc, AtomicArc, Guard};
+use crate::sync::{Arc, AtomicArc, Guard,RefCount, AsPtr};
 
 /// A plugin(or future) global type-aware handle to an API.
 ///
@@ -188,8 +185,20 @@ where
     }
 }
 
+impl<T: 'static + ?Sized> From<ApiHandle<T>> for AnyApiHandle {
+    fn from(value: ApiHandle<T>) -> Self {
+        value.inner
+    }
+}
+
 unsafe impl Send for AnyApiHandle {}
 unsafe impl Sync for AnyApiHandle {}
+
+#[derive(Error, Debug)]
+pub enum ApiError {
+    #[error("Null entry inside api registry, which usually means you're accessing this api after")]
+    NullEntry(String),
+}
 
 /// Api registry api.
 ///
@@ -200,16 +209,22 @@ pub trait ApiRegistryApi: Api {
     /// Typically, if you want to register an api, you create a `Box<dyn YourApiTraitName>` or `Box<YourApiStructName>`,
     /// and then use [`AnyApiHandle::from<Box<T>>`] where `T:'static + TraitcastableAny` convert it to `AnyApiHandle`.
     /// Or if you using #[define_api] to define your api, you can use the public functions exposed as `pub fn get_your_api_trait_name() -> ApiHandle<dyn YourApiTrait>`.
-    fn set(&self, name: &'static str, version: Version, api: AnyApiHandle);
+    fn set(&self, name: &'static str, version: Version, api: AnyApiHandle) -> AnyApiHandle;
     /// Remove an api with specific name and version.
-    fn remove(&self, name: &'static str, version: Version);
+    fn remove(&self, name: &'static str, version: Version) -> Option<AnyApiHandle>;
     /// Find an api with specific name and version.
+    ///
+    /// It will return a [`Arc`] which points to a null pointer if the api not found,
+    /// Be careful, you shouldn't access the api handle when you're inside `load_plugin`,
+    /// and you shouldn't access the api handle when the plugin is unloaded.
     fn find(&self, name: &'static str, version: Version) -> AnyApiHandle;
     /// Clear and shut down the api registry. Currently not implemented.
     ///
     /// ## Note
     ///
     /// Do we really need it? All memory will be freed when the program exits.
+    ///
+    /// It will swap all internal ptr to null
     fn shutdown(&self);
     fn ref_counts(&self);
 }
@@ -223,60 +238,80 @@ struct ApiEntry {
 unsafe impl Send for ApiEntry {}
 unsafe impl Sync for ApiEntry {}
 
-/// An api registry that can be used to register api implementations.
-struct ApiRegistry {
-    // A hash map that maps api types to their implementations
-    apis: RwLock<FxHashMap<(&'static str, Version), ApiEntry>>,
-}
-
 // crate::impl_api!(ApiRegistryRef, ApiRegistryApi, (0, 1, 0));
 
 // #[make_trait_castable(Api, ApiRegistryApi)]
 #[define_api((0,1,0), bubble_core::api::api_registry_api::ApiRegistryApi)]
-struct ApiRegistryRef {
-    pub inner: &'static ApiRegistry,
+struct ApiRegistry {
+    pub inner: RwLock<FxHashMap<(&'static str, Version), ApiEntry>>,
+}
+
+pub fn get_api_registry_api() -> ApiHandle<dyn ApiRegistryApi> {
+    ApiRegistry::new()
 }
 
 /// It will be managed by the main executable, so no need to use dyntls.
-static API_REGISTRY: OnceLock<ApiRegistry> = OnceLock::new();
-
-impl ApiRegistryRef {
-    fn new() -> ApiHandle<dyn ApiRegistryApi> {
-        let api_registry_api: AnyApiHandle = Box::new(ApiRegistryRef {
-            inner: API_REGISTRY.get_or_init(|| ApiRegistry::new()),
-        })
-        .into();
-        api_registry_api.downcast()
-    }
-}
+static API_REGISTRY: OnceLock<ApiHandle<dyn ApiRegistryApi>> = OnceLock::new();
 
 impl ApiRegistry {
-    pub fn new() -> Self {
-        Self {
-            apis: RwLock::new(FxHashMap::default()),
-        }
-    }
-    pub fn set(&self, name: &'static str, version: Version, api: AnyApiHandle) {
-        let id = (name, version);
-        let entry = ApiEntry { inner: api };
-        self.apis.write().unwrap().insert(id, entry);
+    fn new() -> ApiHandle<dyn ApiRegistryApi> {
+        let handle = API_REGISTRY
+            .get_or_init(|| {
+                let registry = ApiRegistry::empty();
+                let any_handler: AnyApiHandle = Box::new(registry).into();
+                // TODO: remove downcast here to avoid drop delay.
+                any_handler.downcast()
+            })
+            .clone();
+        handle
     }
 
-    pub fn remove(&self, name: &'static str, version: Version) {
-        todo!()
+    pub fn empty() -> Self {
+        Self {
+            inner: RwLock::new(FxHashMap::default()),
+        }
+    }
+
+    pub fn set(&self, name: &'static str, version: Version, api: AnyApiHandle) -> AnyApiHandle {
+        let id = (name, version);
+        let mut w_lock = self.inner.write().unwrap();
+        // if don't have the api, create a new one inside registry,
+        // if specific entry is already exist, update the api using atomic store
+        let raw_entry = w_lock
+            .entry(id.clone())
+            .and_modify(|entry| {
+                // TODO: if we don't use RWLock in ApiRegistry, we should use compare_exchange
+                println!("found {:?} when set", id.clone());
+                let arc = &entry.inner.0;
+                arc.store(api.0.load().as_ref());
+            })
+            .or_insert({
+                println!("not found {:?} when set", id.clone());
+                ApiEntry { inner: api }
+            });
+        raw_entry.inner.clone()
+    }
+
+    pub fn remove(&self, name: &'static str, version: Version) -> Option<AnyApiHandle> {
+        let mut w_lock = self.inner.write().unwrap();
+        let id = (name, version);
+        let entry = w_lock.remove(&id).map(|entry| entry.inner);
+        entry
     }
 
     pub fn get(&self, name: &'static str, version: Version) -> AnyApiHandle {
         // get the raw entry
-        let r_lock = self.apis.read().unwrap();
+        let r_lock = self.inner.read().unwrap();
         let id = (name, version.clone());
         if let Some(raw_entry) = r_lock.get(&id) {
+            println!("found {:?} when get", id.clone());
             raw_entry.inner.clone()
         } else {
             drop(r_lock);
-            let mut w_lock = self.apis.write().unwrap();
-            // if don't have the api, create a new one inside registry
-            let raw_entry = w_lock.entry((name, version)).or_insert({
+            println!("not found {:?} when get", id.clone());
+            let mut w_lock = self.inner.write().unwrap();
+            // if don't have the api, create a new one points to null inside registry
+            let raw_entry = w_lock.entry(id).or_insert({
                 let new_arc_to_null = Arc::new(AtomicArc::new(None));
                 ApiEntry {
                     inner: AnyApiHandle(new_arc_to_null),
@@ -290,28 +325,31 @@ impl ApiRegistry {
         // loop through the hash map and print the ref counts
     }
 
-    pub fn shutdown(self) {}
+    fn shutdown(&self) {
+        // for all entry in the hash map, drop the api
+        self.inner.write().unwrap().clear();
+    }
 }
 
-impl ApiRegistryApi for ApiRegistryRef
+impl ApiRegistryApi for ApiRegistry
 where
     Self: 'static,
 {
-    fn set(&self, name: &'static str, version: Version, api: AnyApiHandle) {
-        self.inner.set(name, version, api);
+    fn set(&self, name: &'static str, version: Version, api: AnyApiHandle) -> AnyApiHandle {
+        self.set(name, version, api)
     }
 
-    fn remove(&self, name: &'static str, version: Version) {
-        todo!()
+    fn remove(&self, name: &'static str, version: Version) -> Option<AnyApiHandle> {
+        self.remove(name, version)
     }
 
     fn find(&self, name: &'static str, version: Version) -> AnyApiHandle {
-        self.inner.get(name, version)
+        self.get(name, version)
     }
 
     fn ref_counts(&self) {}
 
     fn shutdown(&self) {
-        todo!()
+        self.shutdown();
     }
 }
