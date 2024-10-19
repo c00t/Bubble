@@ -16,3 +16,6 @@
 [submodule "third-party/vendor/async-ffi"]
 	path = third-party/vendor/async-ffi
 	url = https://github.com/c00t/async-ffi.git
+[submodule "third-party/vendor/tracing"]
+	path = third-party/vendor/tracing
+	url = https://github.com/c00t/tracing.git
