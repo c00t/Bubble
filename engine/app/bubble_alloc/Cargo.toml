@@ -22,3 +22,7 @@ lto = true
 codegen-units = 1
 panic = "abort" # This library will always be a dynamic library.
 
+[features]
+default = ["system"]
+mimalloc = []
+system = []
