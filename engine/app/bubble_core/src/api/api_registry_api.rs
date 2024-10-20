@@ -32,12 +32,12 @@ type ApiHandleInternal<T> = Arc<AtomicArc<Box<T>>>;
 /// A plugin(or future) global type-aware handle to an API.
 ///
 /// Usually get from [`AnyApiHandle`] by downcasting.
-pub struct ApiHandle<T: 'static + ?Sized + Sync + Send> {
+pub struct ApiHandle<T: 'static + ?Sized + Api> {
     inner: AnyApiHandle,
     _phantom_type: marker::PhantomData<ApiHandleInternal<T>>,
 }
 
-impl<T: 'static + ?Sized + Sync + Send> ApiHandle<T> {
+impl<T: 'static + ?Sized + Api> ApiHandle<T> {
     pub fn get<'local>(&'local self) -> Option<LocalApiHandle<'local, T>> {
         self.inner.0.load().map(|guard| LocalApiHandle {
             _guard: guard,
@@ -47,7 +47,7 @@ impl<T: 'static + ?Sized + Sync + Send> ApiHandle<T> {
     }
 }
 
-impl<T: 'static + ?Sized + Sync + Send> Clone for ApiHandle<T> {
+impl<T: 'static + ?Sized + Api> Clone for ApiHandle<T> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -56,7 +56,7 @@ impl<T: 'static + ?Sized + Sync + Send> Clone for ApiHandle<T> {
     }
 }
 
-impl<T: 'static + ?Sized + Sync + Send> RefCount for ApiHandle<T> {
+impl<T: 'static + ?Sized + Api> RefCount for ApiHandle<T> {
     /// Get the strong count of the underlying [`Arc`].
     fn strong_count(&self) -> usize {
         self.inner.0.strong_count()
@@ -76,14 +76,14 @@ impl<T: 'static + ?Sized + Sync + Send> RefCount for ApiHandle<T> {
 /// you should use [`LocalApiHandle::from`] to create a new [`ApiHandle`].
 ///
 /// You don't need to remember their differences, [`ApiHandle`] implement [`Send`] and [`Sync`], while [`LocalApiHandle`] doesn't.
-pub struct LocalApiHandle<'local, T: 'static + ?Sized + Sync + Send> {
+pub struct LocalApiHandle<'local, T: 'static + ?Sized + Api> {
     // a guard that pervent the api from being dropped
     _guard: Guard<Box<dyn TraitcastableAny + 'static + Sync + Send>>,
     _api_handle_ref: &'local ApiHandle<T>,
-    _phantom_type: marker::PhantomData<&'static T>,
+    _phantom_type: marker::PhantomData<&'local T>,
 }
 
-impl<T: 'static + ?Sized + Sync + Send> RefCount for LocalApiHandle<'_, T> {
+impl<T: 'static + ?Sized + Api> RefCount for LocalApiHandle<'_, T> {
     /// Return a strong count of the [`AtomicArc`] object
     ///
     /// ## Note
@@ -105,7 +105,7 @@ impl<T: 'static + ?Sized + Sync + Send> RefCount for LocalApiHandle<'_, T> {
     }
 }
 
-impl<T: 'static + ?Sized + Sync + Send> From<LocalApiHandle<'_, T>> for ApiHandle<T>
+impl<T: 'static + ?Sized + Api> From<LocalApiHandle<'_, T>> for ApiHandle<T>
 where
     dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
 {
@@ -114,7 +114,7 @@ where
     }
 }
 
-impl<T: 'static + ?Sized + Sync + Send> From<&LocalApiHandle<'_, T>> for ApiHandle<T>
+impl<T: 'static + ?Sized + Api> From<&LocalApiHandle<'_, T>> for ApiHandle<T>
 where
     dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
 {
@@ -123,7 +123,7 @@ where
     }
 }
 
-impl<'local, T: 'static + ?Sized + Sync + Send> From<&'local ApiHandle<T>>
+impl<'local, T: 'static + ?Sized + Api> From<&'local ApiHandle<T>>
     for LocalApiHandle<'local, T>
 where
     dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
@@ -134,7 +134,7 @@ where
     }
 }
 
-impl<T: 'static + ?Sized + Sync + Send> Deref for LocalApiHandle<'_, T>
+impl<T: 'static + ?Sized + Api> Deref for LocalApiHandle<'_, T>
 where
     dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
 {
@@ -161,7 +161,7 @@ pub struct AnyApiHandle(ApiHandleInternal<dyn TraitcastableAny + Sync + Send>);
 
 impl AnyApiHandle {
     /// Downcast the opaque api handle to a specific api handle.
-    pub fn downcast<T: 'static + ?Sized + Sync + Send>(self) -> ApiHandle<T> {
+    pub fn downcast<T: 'static + ?Sized + Api>(self) -> ApiHandle<T> {
         ApiHandle {
             inner: self,
             _phantom_type: marker::PhantomData,
@@ -185,7 +185,7 @@ where
     }
 }
 
-impl<T: 'static + ?Sized + Sync + Send> From<ApiHandle<T>> for AnyApiHandle {
+impl<T: 'static + ?Sized + Api> From<ApiHandle<T>> for AnyApiHandle {
     fn from(value: ApiHandle<T>) -> Self {
         value.inner
     }
