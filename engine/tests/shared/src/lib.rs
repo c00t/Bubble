@@ -75,7 +75,7 @@ impl TaskSystem {
     }
 }
 
-pub trait TaskSystemApi {
+pub trait TaskSystemApi: Api {
     /// Spawn a task on the current thread, and return a handle to it.
     ///
     /// The task will be executed on the current thread, and the handle will be returned immediately.

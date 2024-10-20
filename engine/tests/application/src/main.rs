@@ -567,6 +567,9 @@ fn main() {
         .shutdown();
     MAIN.get().unwrap().store::<bubble_core::sync::Arc<_>>(None); // api: strong count 2, task: strong count 3
 
+    // Unload dll library
+    // TODO: Arc? it will unload when it drop, but if you're using Arc in static to ref it
+
     // TEST4
     println!("--TEST4->");
     println!("--You should see strong count increase then drop--");
