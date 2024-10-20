@@ -25,17 +25,19 @@ use rustc_hash::FxHashMap;
 use thiserror::Error;
 
 use super::Api;
-use crate::sync::{Arc, AtomicArc, Guard,RefCount, AsPtr};
+use crate::sync::{Arc, AsPtr, AtomicArc, Guard, RefCount};
+
+type ApiHandleInternal<T> = Arc<AtomicArc<Box<T>>>;
 
 /// A plugin(or future) global type-aware handle to an API.
 ///
 /// Usually get from [`AnyApiHandle`] by downcasting.
-pub struct ApiHandle<T: 'static + ?Sized> {
+pub struct ApiHandle<T: 'static + ?Sized + Sync + Send> {
     inner: AnyApiHandle,
-    _phantom_type: marker::PhantomData<*const T>,
+    _phantom_type: marker::PhantomData<ApiHandleInternal<T>>,
 }
 
-impl<T: 'static + ?Sized> ApiHandle<T> {
+impl<T: 'static + ?Sized + Sync + Send> ApiHandle<T> {
     pub fn get<'local>(&'local self) -> Option<LocalApiHandle<'local, T>> {
         self.inner.0.load().map(|guard| LocalApiHandle {
             _guard: guard,
@@ -45,7 +47,7 @@ impl<T: 'static + ?Sized> ApiHandle<T> {
     }
 }
 
-impl<T: 'static + ?Sized> Clone for ApiHandle<T> {
+impl<T: 'static + ?Sized + Sync + Send> Clone for ApiHandle<T> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -54,7 +56,7 @@ impl<T: 'static + ?Sized> Clone for ApiHandle<T> {
     }
 }
 
-impl<T: 'static + ?Sized> RefCount for ApiHandle<T> {
+impl<T: 'static + ?Sized + Sync + Send> RefCount for ApiHandle<T> {
     /// Get the strong count of the underlying [`Arc`].
     fn strong_count(&self) -> usize {
         self.inner.0.strong_count()
@@ -65,9 +67,6 @@ impl<T: 'static + ?Sized> RefCount for ApiHandle<T> {
     }
 }
 
-unsafe impl<T: 'static + ?Sized> Send for ApiHandle<T> {}
-unsafe impl<T: 'static + ?Sized> Sync for ApiHandle<T> {}
-
 /// A function local type-aware handle to an API.
 ///
 /// Usually get from [`ApiHandle`] by [`ApiHandle::get`]. It avoid overhead of ref count
@@ -77,14 +76,14 @@ unsafe impl<T: 'static + ?Sized> Sync for ApiHandle<T> {}
 /// you should use [`LocalApiHandle::from`] to create a new [`ApiHandle`].
 ///
 /// You don't need to remember their differences, [`ApiHandle`] implement [`Send`] and [`Sync`], while [`LocalApiHandle`] doesn't.
-pub struct LocalApiHandle<'local, T: 'static + ?Sized> {
+pub struct LocalApiHandle<'local, T: 'static + ?Sized + Sync + Send> {
     // a guard that pervent the api from being dropped
-    _guard: Guard<Box<(dyn TraitcastableAny + 'static)>>,
+    _guard: Guard<Box<dyn TraitcastableAny + 'static + Sync + Send>>,
     _api_handle_ref: &'local ApiHandle<T>,
-    _phantom_type: marker::PhantomData<*const T>,
+    _phantom_type: marker::PhantomData<&'static T>,
 }
 
-impl<T: 'static + ?Sized> RefCount for LocalApiHandle<'_, T> {
+impl<T: 'static + ?Sized + Sync + Send> RefCount for LocalApiHandle<'_, T> {
     /// Return a strong count of the [`AtomicArc`] object
     ///
     /// ## Note
@@ -106,27 +105,28 @@ impl<T: 'static + ?Sized> RefCount for LocalApiHandle<'_, T> {
     }
 }
 
-impl<T: 'static + ?Sized> From<LocalApiHandle<'_, T>> for ApiHandle<T>
+impl<T: 'static + ?Sized + Sync + Send> From<LocalApiHandle<'_, T>> for ApiHandle<T>
 where
-    dyn TraitcastableAny: TraitcastableAnyInfra<T>,
+    dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
 {
     fn from(value: LocalApiHandle<T>) -> Self {
         value._api_handle_ref.clone()
     }
 }
 
-impl<T: 'static + ?Sized> From<&LocalApiHandle<'_, T>> for ApiHandle<T>
+impl<T: 'static + ?Sized + Sync + Send> From<&LocalApiHandle<'_, T>> for ApiHandle<T>
 where
-    dyn TraitcastableAny: TraitcastableAnyInfra<T>,
+    dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
 {
     fn from(value: &LocalApiHandle<T>) -> Self {
         value._api_handle_ref.clone()
     }
 }
 
-impl<'local, T: 'static + ?Sized> From<&'local ApiHandle<T>> for LocalApiHandle<'local, T>
+impl<'local, T: 'static + ?Sized + Sync + Send> From<&'local ApiHandle<T>>
+    for LocalApiHandle<'local, T>
 where
-    dyn TraitcastableAny: TraitcastableAnyInfra<T>,
+    dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
 {
     fn from(value: &'local ApiHandle<T>) -> Self {
         // it shouldn't fail (with same version of compiler toolchain), the type infomation was encoded in the generic
@@ -134,9 +134,9 @@ where
     }
 }
 
-impl<T: 'static + ?Sized> Deref for LocalApiHandle<'_, T>
+impl<T: 'static + ?Sized + Sync + Send> Deref for LocalApiHandle<'_, T>
 where
-    dyn TraitcastableAny: TraitcastableAnyInfra<T>,
+    dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
 {
     type Target = T;
 
@@ -157,11 +157,11 @@ where
 /// let task_system_api: ApiHandle<dyn TaskSystemApi> = api_registry_api.find(task_system_api::NAME, task_system_api::VERSION).downcast();
 ///
 /// ```
-pub struct AnyApiHandle(Arc<AtomicArc<Box<dyn TraitcastableAny>>>);
+pub struct AnyApiHandle(ApiHandleInternal<dyn TraitcastableAny + Sync + Send>);
 
 impl AnyApiHandle {
     /// Downcast the opaque api handle to a specific api handle.
-    pub fn downcast<T: 'static + ?Sized>(self) -> ApiHandle<T> {
+    pub fn downcast<T: 'static + ?Sized + Sync + Send>(self) -> ApiHandle<T> {
         ApiHandle {
             inner: self,
             _phantom_type: marker::PhantomData,
@@ -175,24 +175,21 @@ impl Clone for AnyApiHandle {
     }
 }
 
-impl<T: 'static + TraitcastableAny> From<Box<T>> for AnyApiHandle
+impl<T: 'static + TraitcastableAny + Sync + Send> From<Box<T>> for AnyApiHandle
 where
-    dyn TraitcastableAny: TraitcastableAnyInfra<T>,
+    dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
 {
     fn from(value: Box<T>) -> Self {
-        let boxed_any: Box<dyn TraitcastableAny> = value;
+        let boxed_any: Box<dyn TraitcastableAny + Sync + Send> = value;
         AnyApiHandle(Arc::new(AtomicArc::new(boxed_any)))
     }
 }
 
-impl<T: 'static + ?Sized> From<ApiHandle<T>> for AnyApiHandle {
+impl<T: 'static + ?Sized + Sync + Send> From<ApiHandle<T>> for AnyApiHandle {
     fn from(value: ApiHandle<T>) -> Self {
         value.inner
     }
 }
-
-unsafe impl Send for AnyApiHandle {}
-unsafe impl Sync for AnyApiHandle {}
 
 #[derive(Error, Debug)]
 pub enum ApiError {
@@ -235,12 +232,11 @@ struct ApiEntry {
     inner: AnyApiHandle,
 }
 
-unsafe impl Send for ApiEntry {}
-unsafe impl Sync for ApiEntry {}
-
 // crate::impl_api!(ApiRegistryRef, ApiRegistryApi, (0, 1, 0));
 
-// #[make_trait_castable(Api, ApiRegistryApi)]
+/// An [`ApiRegistryApi`] implementation.
+///
+/// It should be efficient to use [`RwLock`] and [`HashMap`] here, it will be wrote rarely.
 #[define_api((0,1,0), bubble_core::api::api_registry_api::ApiRegistryApi)]
 struct ApiRegistry {
     pub inner: RwLock<FxHashMap<(&'static str, Version), ApiEntry>>,
@@ -331,10 +327,7 @@ impl ApiRegistry {
     }
 }
 
-impl ApiRegistryApi for ApiRegistry
-where
-    Self: 'static,
-{
+impl ApiRegistryApi for ApiRegistry {
     fn set(&self, name: &'static str, version: Version, api: AnyApiHandle) -> AnyApiHandle {
         self.set(name, version, api)
     }

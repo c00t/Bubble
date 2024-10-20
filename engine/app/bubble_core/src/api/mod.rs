@@ -23,7 +23,7 @@ pub use trait_cast_rs::{
 /// When your api need to clear some resources when the application shutdown, because the api will
 /// hold a static reference to your api, you should implement the [`Api::shutdown`] function
 /// instead of [`Drop`], it will be called when the application shutdown.
-pub trait Api: Any + Sync {
+pub trait Api: Any + Sync + Send {
     // const NAME: &'static str;
     // const VERSION: Version;
     fn name(&self) -> &'static str;
