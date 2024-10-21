@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::time::Duration;
 use std::{any::TypeId, sync::OnceLock, thread};
 
 use async_ffi::FutureExt;
@@ -10,6 +12,7 @@ use bubble_core::{
 };
 use bubble_tasks::runtime::Runtime;
 use dlopen2::wrapper::{Container, WrapperApi};
+use rand::Rng;
 use shared::{self as sd, TaskSystemApi, TraitCastableDropSub, TraitCastableDropSuper};
 
 #[derive(WrapperApi)]
@@ -460,6 +463,49 @@ pub struct Main {
     task_system_api: ApiHandle<dyn TaskSystemApi>,
 }
 
+static COUNTER: AtomicI32 = AtomicI32::new(0);
+
+async fn long_running_async_task() -> String {
+    let mut rng = rand::thread_rng();
+    let x = rng.gen_range(10..100);
+    let y = rng.gen_range(100..1000);
+    // thread::sleep(Duration::from_micros(y));
+    bubble_tasks::runtime::time::sleep(Duration::from_micros(y)).await;
+    "Long Running Async Task".to_string()
+}
+
+pub async fn tick() -> bool {
+    // let task_system_api = task_system.get().unwrap();
+    let counter = COUNTER.load(Ordering::SeqCst);
+    // random choose tasks
+    /// A long running background task which should be run in the background.
+    // fn long_running_blocking_task(index: i32, count: i32) -> String {
+    //     // suppose that we're reading a large shader file with index.
+    //     std::thread::sleep(Duration::from_secs(10));
+    //     format!("Long Running Blocking Task {}:{}", index, count).to_string()
+    // }
+
+    // // create a channel to send the result of the task
+    // let (tx, mut rx) = futures_channel::oneshot::channel();
+    // let _ = task_system_api.dispatch_blocking(Box::new(move || {
+    //     let q = long_running_blocking_task(counter,0);
+    //     tx.send(q).unwrap();
+    // }));
+    // while let Ok(Some(shader_module)) = rx.try_recv() {
+    //     println!("store a shader module to {}", shader_module);
+    // }
+    let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
+    long_running_async_task().await;
+
+    if counter == 10000 {
+        println!("in tick: {}, return false", counter);
+        false
+    } else {
+        println!("in tick: {}, return true", counter);
+        true
+    }
+}
+
 fn main() {
     // get current working directory
     let cwd = std::env::current_dir().unwrap();
@@ -487,6 +533,7 @@ fn main() {
     // 2. set api
     println!("...");
     let task_system_api = shared::register_task_system_api(&api_registry_api); // task: strong count 4
+    println!("{:?}", task_system_api);
     println!("...");
     let _ = MAIN.get_or_init(|| {
         AtomicArc::new(Main {
@@ -596,5 +643,64 @@ fn main() {
     test_trait_castable_any_3(b_super);
     println!("<-TEST5--");
 
-    thread::sleep(std::time::Duration::from_secs(10));
+    use winit::event_loop::EventLoop;
+    let event_loop = EventLoop::new().unwrap();
+    event_loop.set_control_flow(ControlFlow::Poll);
+    let mut app = App::default();
+    let tick_thread = thread::spawn(move || {
+        let task_system = task_system_api.clone();
+        let task_api = task_system.get().unwrap();
+        while unsafe { task_api.tick(tick().into_local_ffi()) } {
+            println!("...");
+        }
+    });
+    let _ = event_loop.run_app(&mut app);
+
+    let _ = tick_thread.join();
+}
+
+use winit::application::ApplicationHandler;
+use winit::event::WindowEvent;
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::window::{Window, WindowId};
+
+#[derive(Default)]
+struct App {
+    window: Option<Window>,
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.window = Some(
+            event_loop
+                .create_window(Window::default_attributes())
+                .unwrap(),
+        );
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => {
+                println!("The close button was pressed; stopping");
+                event_loop.exit();
+            }
+            WindowEvent::RedrawRequested => {
+                // Redraw the application.
+                //
+                // It's preferable for applications that do not render continuously to render in
+                // this event rather than in AboutToWait, since rendering in here allows
+                // the program to gracefully handle redraws requested by the OS.
+
+                // Draw.
+
+                // Queue a RedrawRequested event.
+                //
+                // You only need to call this if you've determined that you need to redraw in
+                // applications which do not always need to. Applications that redraw continuously
+                // can render here instead.
+                self.window.as_ref().unwrap().request_redraw();
+            }
+            _ => (),
+        }
+    }
 }

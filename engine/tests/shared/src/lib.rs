@@ -1,9 +1,10 @@
 #![feature(ptr_metadata)]
 #![feature(once_cell_get_mut)]
-use std::num::NonZeroUsize;
 use std::sync::OnceLock;
+use std::{num::NonZeroUsize, time::Duration};
 
 use async_ffi::FutureExt;
+use bon::{bon, builder};
 use bubble_core::{
     api::prelude::*,
     sync::{AsPtr, AtomicArc},
@@ -55,23 +56,65 @@ crate::thread_local! {
 pub type StringAlias0 = std::string::String;
 pub type StringAlias1 = String;
 
-#[define_api((0,1,0), shared::TaskSystemApi)]
+struct MainRuntime(bubble_tasks::runtime::Runtime);
+
+unsafe impl Send for MainRuntime {}
+unsafe impl Sync for MainRuntime {}
+
+#[define_api_with_id((0,1,0), shared::TaskSystemApi)]
 struct TaskSystem {
     pub dispatcher: AtomicArc<std::sync::RwLock<Option<Dispatcher>>>,
+    pub tick_sender: thingbuf::mpsc::blocking::Sender<bool>,
+    pub tick_reader: thingbuf::mpsc::blocking::Receiver<bool>,
+    pub main_runtime: MainRuntime,
 }
 
+#[builder]
+pub fn get_task_system_api(
+    thread_count: usize,
+    thread_names: impl Fn(usize) -> String + 'static,
+    frame_delay: usize,
+) -> ApiHandle<dyn TaskSystemApi> {
+    let dispatcher = Dispatcher::builder()
+        .worker_threads(NonZeroUsize::new(thread_count).unwrap())
+        .thread_names(thread_names)
+        .build()
+        .unwrap();
+    let (sender, reader) = thingbuf::mpsc::blocking::channel(frame_delay);
+    // queue a few frames to start with
+    sender.send(true).unwrap();
+    let main_runtime = MainRuntime(bubble_tasks::runtime::Runtime::new().unwrap());
+    let task_system_api: AnyApiHandle = Box::new(TaskSystem {
+        dispatcher: AtomicArc::new(std::sync::RwLock::new(Some(dispatcher))),
+        tick_sender: sender,
+        tick_reader: reader,
+        main_runtime,
+    })
+    .into();
+    task_system_api.downcast()
+}
+
+#[bon]
 impl TaskSystem {
+    #[builder]
     pub fn new() -> ApiHandle<dyn TaskSystemApi> {
         let dispatcher = Dispatcher::builder()
-            .worker_threads(NonZeroUsize::new(8).unwrap())
             .thread_names(|index| format!("compio-worker-{index}"))
             .build()
             .unwrap();
-        let api_registry_api: AnyApiHandle = Box::new(TaskSystem {
+        let (sender, reader) = thingbuf::mpsc::blocking::channel(3);
+        for _ in 0..3 {
+            sender.send(true).unwrap();
+        }
+        let main_runtime = MainRuntime(bubble_tasks::runtime::Runtime::new().unwrap());
+        let task_system_api: AnyApiHandle = Box::new(TaskSystem {
             dispatcher: AtomicArc::new(std::sync::RwLock::new(Some(dispatcher))),
+            tick_sender: sender,
+            tick_reader: reader,
+            main_runtime,
         })
         .into();
-        api_registry_api.downcast()
+        task_system_api.downcast()
     }
 }
 
@@ -82,8 +125,6 @@ pub trait TaskSystemApi: Api {
     /// `bubble_tasks` is a per-core runtime library, so the task will be executed on the current core.
     fn spawn(&self, fut: async_ffi::LocalFfiFuture<()>) -> bubble_tasks::runtime::JoinHandle<()>;
     /// Dispatch a task to the task system, and return a future to it.
-    ///
-    ///
     fn dispatch(
         &self,
         fut: async_ffi::FfiFuture<()>,
@@ -96,6 +137,15 @@ pub trait TaskSystemApi: Api {
     ///
     /// Use a temp unsafe implementation to check atomic counter
     fn shutdown(&self);
+    /// Run the tick task as the current future
+    ///
+    /// ## Note
+    ///
+    /// You should not do to much io task in tick task, it should handled by dispatcher,
+    /// and then use a channel to notify the tick task.
+    ///
+    /// 2 or more tick task may be executed parallelly on different threads, so you should be careful about the data race.
+    unsafe fn tick(&self, tick_task: async_ffi::LocalFfiFuture<bool>) -> bool;
 }
 
 impl TaskSystemApi for TaskSystem {
@@ -158,5 +208,85 @@ impl TaskSystemApi for TaskSystem {
             let runtime = bubble_tasks::runtime::Runtime::new().unwrap();
             let _ = runtime.block_on(async move { x.join().await });
         }
+    }
+
+    unsafe fn tick(&self, tick_task: async_ffi::LocalFfiFuture<bool>) -> bool {
+        let r = self.main_runtime.0.enter(|| {
+            // it's ok to enter next frame? we allow max x frame to be queued
+            // or we'll block the thread
+            if let Ok(result) = self.tick_reader.try_recv() {
+                println!("receive a tick result:{}", result);
+                // we are allowed to queue next tick, and the result return by tick_task is true(continue loop)
+                if result {
+                    println!("queue a tick");
+                    // deatch queue next tick
+                    unsafe {
+                        self.main_runtime
+                            .0
+                            .spawn_unchecked(async {
+                                self.tick_sender.send(tick_task.await).unwrap();
+                            })
+                            .detach();
+                    }
+                    // loop till current has no more tasks
+                    loop {
+                        self.main_runtime.0.poll_with(Some(Duration::ZERO));
+                        let remaining_tasks = self.main_runtime.0.run();
+                        if !remaining_tasks {
+                            break;
+                        }
+                    }
+                    return true;
+                } else {
+                    println!("tick task return a end loop");
+                    // loop the runtime untill all tasks are done
+                    loop {
+                        // self.main_runtime.0.poll_with(Some(Duration::ZERO));
+                        let remaining_tasks = self.main_runtime.0.run();
+                        if let Err(x) = self.tick_reader.try_recv() {
+                            println!("{:?}", x);
+                            break;
+                        }
+                        let mut timeout = if remaining_tasks {
+                            Some(Duration::ZERO)
+                        } else {
+                            self.main_runtime.0.current_timeout()
+                        };
+                        if let None = timeout {
+                            timeout = Some(Duration::ZERO)
+                        }
+                        self.main_runtime.0.poll_with(timeout);
+                    }
+                    debug_assert_eq!(self.tick_reader.len(), 0);
+                    return false;
+                }
+            } else {
+                // we can't queue next tick, so we just loop the runtime
+                println!("tick queue blocked");
+                loop {
+                    // self.main_runtime.0.poll_with(Some(Duration::ZERO));
+                    // some tick task finish
+                    print!("{}", self.tick_reader.len());
+                    if self.tick_reader.len() != 0 {
+                        break;
+                    }
+                    let remaining_tasks = self.main_runtime.0.run();
+                    print!("{}", remaining_tasks);
+                    let mut timeout = if remaining_tasks {
+                        Some(Duration::ZERO)
+                    } else {
+                        self.main_runtime.0.current_timeout()
+                    };
+                    if let None = timeout {
+                        timeout = Some(Duration::ZERO)
+                    }
+                    println!("timeout({:?})", timeout);
+                    self.main_runtime.0.poll_with(timeout);
+                }
+                println!("end blocked");
+                return true;
+            }
+        });
+        r
     }
 }

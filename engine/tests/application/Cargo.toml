@@ -8,5 +8,10 @@ bubble-core = {path = "../../app/bubble_core", default-features = false, feature
 dlopen2 = "0.7.0"
 shared = {workspace = true}
 bubble-tasks = {workspace = true}
-async-ffi = { version = "0.5.0", features = ["macros"] }
 futures-util = "0.3.31"
+winit = "0.30.5"
+bon = "2.3.0"
+async-ffi = { path = "../../third-party/vendor/async-ffi", features = ["macros"] }
+futures-channel = "0.3.31"
+rand = "=0.9.0-alpha.2"
+rand_distr = "=0.5.0-alpha.2"

@@ -10,5 +10,5 @@ crate-type = ["cdylib"]
 bubble-core = {path = "../../app/bubble_core", default-features = false, features = ["plugin"]}
 shared = {workspace = true}
 bubble-tasks = {workspace = true}
-async-ffi = { version = "0.5.0", features = ["macros"] }
+async-ffi = { path = "../../third-party/vendor/async-ffi", features = ["macros"] }
 futures-util = "0.3.31"

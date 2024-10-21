@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-async-ffi = { version = "0.5.0", features = ["macros"] }
+async-ffi = { path = "../../third-party/vendor/async-ffi", features = ["macros"] }
+bon = "2.3.0"
 bubble-core = {path = "../../app/bubble_core", default-features = false}
 bubble-tasks = {workspace = true}
 futures-channel = "0.3.31"
+thingbuf = "0.1.6"
