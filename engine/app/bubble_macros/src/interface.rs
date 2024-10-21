@@ -5,12 +5,12 @@ use syn::{
     parse_macro_input, parse_quote, DeriveInput, ExprTuple, Path, Token,
 };
 
-struct ApiAttr {
+struct InterfaceAttr {
     version: (u64, u64, u64),
     api_trait_path: Path,
 }
 
-impl Parse for ApiAttr {
+impl Parse for InterfaceAttr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let version: ExprTuple = input.parse()?;
         input.parse::<Token![,]>()?;
@@ -44,7 +44,7 @@ impl Parse for ApiAttr {
             parse_int(&version.elems[2])?,
         );
 
-        Ok(ApiAttr {
+        Ok(InterfaceAttr {
             version,
             api_trait_path,
         })
@@ -62,12 +62,12 @@ fn snake_case(s: &str) -> String {
     result
 }
 
-pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
-    let ApiAttr {
+    let InterfaceAttr {
         version: (version_major, version_minor, version_patch),
         api_trait_path,
-    } = parse_macro_input!(attr as ApiAttr);
+    } = parse_macro_input!(attr as InterfaceAttr);
 
     let struct_name = &input.ident;
     let api_trait_last_segment = api_trait_path
@@ -88,17 +88,17 @@ pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         // #[repr(C)]
-        #[make_trait_castable(Api, #api_trait_last_path)]
+        #[make_trait_castable(Interface, #api_trait_last_path)]
         #input
 
-        impl_api!(#struct_name, #api_trait_last_path, (#version_major, #version_minor, #version_patch));
+        impl_interface!(#struct_name, #api_trait_last_path, (#version_major, #version_minor, #version_patch));
 
         #[doc = #doc_comment_register_api_fn]
-        pub fn #register_api_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>) -> ApiHandle<dyn #api_trait_last_path> {
+        pub fn #register_api_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>) -> InterfaceHandle<dyn #api_trait_last_path> {
             api_registry_api
                 .get()
                 .expect("Failed to get API registry api")
-                .set(constants::NAME, constants::VERSION, #struct_name::builder().build().into())
+                .add_interface(constants::NAME, constants::VERSION, #struct_name::builder().build().into())
                 .downcast()
         }
     };
@@ -106,12 +106,12 @@ pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-pub fn define_api_with_id(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn define_interface_with_id(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
-    let ApiAttr {
+    let InterfaceAttr {
         version: (version_major, version_minor, version_patch),
         api_trait_path,
-    } = parse_macro_input!(attr as ApiAttr);
+    } = parse_macro_input!(attr as InterfaceAttr);
 
     let struct_name = &input.ident;
     let api_trait_last_segment = api_trait_path
@@ -132,7 +132,7 @@ pub fn define_api_with_id(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         // #[repr(C)]
-        #[make_trait_castable(Api, #api_trait_last_path)]
+        #[make_trait_castable(Interface, #api_trait_last_path)]
         #input
 
         unique_id! {
@@ -140,14 +140,14 @@ pub fn define_api_with_id(attr: TokenStream, item: TokenStream) -> TokenStream {
             dyn #api_trait_path
         }
 
-        impl_api!(#struct_name, #api_trait_last_path, (#version_major, #version_minor, #version_patch));
+        impl_interface!(#struct_name, #api_trait_last_path, (#version_major, #version_minor, #version_patch));
 
         #[doc = #doc_comment_register_api_fn]
-        pub fn #register_api_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>) -> ApiHandle<dyn #api_trait_last_path> {
+        pub fn #register_api_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>) -> InterfaceHandle<dyn #api_trait_last_path> {
             api_registry_api
                 .get()
                 .expect("Failed to get API registry api")
-                .set(constants::NAME, constants::VERSION, #struct_name::builder().build().into())
+                .add_interface(constants::NAME, constants::VERSION, #struct_name::builder().build().into())
                 .downcast()
         }
     };
