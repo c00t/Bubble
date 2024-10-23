@@ -1,12 +1,12 @@
-pub use bubble_macros::{
-    define_api, define_api_with_id, define_interface, define_interface_with_id,
-};
+pub use bubble_macros::{declare_api, declare_interface, define_api, define_interface};
 pub use semver::Version;
 use std::any::Any;
 pub use trait_cast_rs::{
     make_trait_castable, make_trait_castable_decl, unique_id, TraitcastTarget, TraitcastableAny,
     TraitcastableAnyInfra, TraitcastableAnyInfraExt, TraitcastableTo, UniqueId, UniqueTypeId,
 };
+
+mod interfaces;
 
 /// Api is used to exposed a collections of functions.
 ///
@@ -87,45 +87,6 @@ pub trait ApiConstant {
 pub trait InterfaceConstant {
     const NAME: &'static str;
     const VERSION: Version;
-    const ID: UniqueId;
-}
-
-/// Implement [`Api`] trait for a api data bundle struct.
-///
-/// ## Example
-///
-/// ```
-/// use bubble_core::impl_api;
-///
-/// pub struct MyApiData {}
-///
-/// pub trait MyApi {}
-///
-/// impl_api!(MyApiData, MyApi, (1, 0, 0));
-/// ```
-#[macro_export]
-macro_rules! impl_api {
-    ($struct_name:ident, $api_name:ident, ($major:expr, $minor:expr,$patch:expr)) => {
-        pub mod constants {
-            use super::Version;
-            pub const NAME: &'static str = ::std::stringify!($api_name);
-            pub const VERSION: self::Version = self::Version::new($major, $minor, $patch);
-        }
-
-        impl self::ApiConstant for $struct_name {
-            const NAME: &'static str = self::constants::NAME;
-            const VERSION: self::Version = self::constants::VERSION;
-        }
-
-        impl self::Api for $struct_name {
-            fn name(&self) -> &'static str {
-                <Self as self::ApiConstant>::NAME
-            }
-            fn version(&self) -> self::Version {
-                <Self as self::ApiConstant>::VERSION
-            }
-        }
-    };
 }
 
 #[macro_export]
@@ -136,6 +97,7 @@ macro_rules! impl_interface {
             use super::UniqueId;
             use super::UniqueTypeId;
             use super::Version;
+
             pub const NAME: &'static str = ::std::stringify!($api_name);
             pub const VERSION: self::Version = self::Version::new($major, $minor, $patch);
             pub const INTERFACE_ID: UniqueId = $struct_name::TYPE_ID;
@@ -144,7 +106,6 @@ macro_rules! impl_interface {
         impl self::InterfaceConstant for $struct_name {
             const NAME: &'static str = self::constants::NAME;
             const VERSION: self::Version = self::constants::VERSION;
-            const ID: UniqueId = self::constants::INTERFACE_ID;
         }
 
         impl self::Interface for $struct_name {
@@ -163,6 +124,7 @@ macro_rules! impl_interface {
 
 pub mod api_registry_api;
 pub mod bump_allocator_api;
+pub mod plugin_api;
 
 pub mod prelude {
     pub use super::api_registry_api::{
@@ -170,11 +132,10 @@ pub mod prelude {
         LocalApiHandle, LocalInterfaceHandle,
     };
     pub use super::{
-        define_api, define_api_with_id, define_interface, define_interface_with_id,
-        make_trait_castable, make_trait_castable_decl, unique_id, Api, ApiConstant, Interface,
-        InterfaceConstant, TraitcastTarget, TraitcastableAny, TraitcastableAnyInfra,
-        TraitcastableAnyInfraExt, TraitcastableTo, UniqueId, UniqueTypeId, Version,
+        declare_api, declare_interface, define_api, define_interface, make_trait_castable,
+        make_trait_castable_decl, unique_id, Api, ApiConstant, Interface, InterfaceConstant,
+        TraitcastTarget, TraitcastableAny, TraitcastableAnyInfra, TraitcastableAnyInfraExt,
+        TraitcastableTo, UniqueId, UniqueTypeId, Version,
     };
-    pub use crate::impl_api;
     pub use crate::impl_interface;
 }

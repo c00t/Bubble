@@ -22,7 +22,7 @@ use std::{
 use super::prelude::*;
 
 use bon::bon;
-use bubble_macros::{define_api, define_api_with_id};
+use bubble_macros::{declare_api, define_api};
 use rustc_hash::FxHashMap;
 use thiserror::Error;
 
@@ -439,6 +439,7 @@ pub enum ApiError {
 /// Api registry api.
 ///
 /// This api is used to register and find apis.
+#[declare_api((0,1,0), bubble_core::api::api_registry_api::ApiRegistryApi)]
 pub trait ApiRegistryApi: Api {
     /// Set an api with specific name and version.
     ///
@@ -501,7 +502,7 @@ struct InterfaceEntry {
 /// An [`ApiRegistryApi`] implementation.
 ///
 /// It should be efficient to use [`RwLock`] and [`HashMap`] here, it will be wrote rarely.
-#[define_api_with_id((0,1,0), bubble_core::api::api_registry_api::ApiRegistryApi)]
+#[define_api(ApiRegistryApi)]
 struct ApiRegistry {
     /// Store api which is registered by plugins.
     ///
@@ -746,5 +747,67 @@ impl ApiRegistryApi for ApiRegistry {
 
     fn available_api_versions(&self, name: &'static str) -> Vec<Version> {
         self.available_api_versions(name)
+    }
+}
+
+/// A typed-decorated api for LocalApiHandle
+impl<'local> LocalApiHandle<'local, dyn ApiRegistryApi> {
+    pub fn local_set<T: ApiConstant + Api + ?Sized>(&self, api: ApiHandle<T>) -> ApiHandle<T> {
+        self.deref().set(T::NAME, T::VERSION, api.inner).downcast()
+    }
+
+    pub fn local_remove<T: ApiConstant + Api + ?Sized>(&self) -> Option<ApiHandle<T>> {
+        self.deref()
+            .remove(T::NAME, T::VERSION)
+            .map(|api| api.downcast())
+    }
+
+    pub fn local_find<T: ApiConstant + Api + ?Sized>(&self) -> ApiHandle<T> {
+        self.deref().find(T::NAME, T::VERSION).downcast()
+    }
+
+    pub fn local_shutdown(&self) {
+        self.deref().shutdown()
+    }
+
+    pub fn local_ref_counts(&self) {
+        self.deref().ref_counts()
+    }
+
+    pub fn local_add_interface<T: InterfaceConstant + Interface + ?Sized>(
+        &self,
+        interface: InterfaceHandle<T>,
+    ) -> InterfaceHandle<T> {
+        self.deref()
+            .add_interface(T::NAME, T::VERSION, interface.inner)
+            .downcast()
+    }
+
+    pub fn local_interface_count<T: InterfaceConstant + Interface + ?Sized>(
+        &self,
+    ) -> Option<usize> {
+        self.deref().interface_count(T::NAME, T::VERSION)
+    }
+
+    pub fn local_get_interfaces<T: InterfaceConstant + Interface + ?Sized>(
+        &self,
+    ) -> Option<Vec<InterfaceHandle<T>>> {
+        self.deref()
+            .get_interfaces(T::NAME, T::VERSION)
+            .map(|handles| handles.into_iter().map(|h| h.downcast()).collect())
+    }
+
+    pub fn local_first_interface<T: InterfaceConstant + Interface + ?Sized>(
+        &self,
+    ) -> Option<InterfaceHandle<T>> {
+        self.deref()
+            .first_interface(T::NAME, T::VERSION)
+            .map(|h| h.downcast())
+    }
+
+    pub fn local_available_api_versions<T: InterfaceConstant + Interface + ?Sized>(
+        &self,
+    ) -> Vec<Version> {
+        self.deref().available_api_versions(T::NAME)
     }
 }
