@@ -2,154 +2,201 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
     parse::{Parse, ParseStream},
-    parse_macro_input, parse_quote, DeriveInput, ExprTuple, Path, Token,
+    parse_macro_input, parse_quote,
+    punctuated::Punctuated,
+    DeriveInput, ExprTuple, FnArg, ItemTrait, Path, Token, TraitItem,
 };
 
-struct ApiAttr {
-    version: (u64, u64, u64),
-    api_trait_path: Path,
+use crate::shared::{dyn_ident, snake_case, Version};
+
+struct ApiDefineAttr {
+    api_trait_paths: Punctuated<Path, Token![,]>,
 }
 
-impl Parse for ApiAttr {
+impl Parse for ApiDefineAttr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let version: ExprTuple = input.parse()?;
-        input.parse::<Token![,]>()?;
-        let api_trait_path: Path = input.parse()?;
+        // Parse one or more trait paths separated by commas
+        let api_trait_paths = Punctuated::parse_terminated(input)?;
 
-        if version.elems.len() != 3 {
-            return Err(syn::Error::new_spanned(
-                version,
-                "Expected version in the format (major, minor, patch)",
-            ));
-        }
-
-        let parse_int = |expr: &syn::Expr| -> syn::Result<u64> {
-            if let syn::Expr::Lit(syn::ExprLit {
-                lit: syn::Lit::Int(lit_int),
-                ..
-            }) = expr
-            {
-                lit_int.base10_parse()
-            } else {
-                Err(syn::Error::new_spanned(
-                    expr,
-                    "Expected integer literal for version number",
-                ))
-            }
-        };
-
-        let version = (
-            parse_int(&version.elems[0])?,
-            parse_int(&version.elems[1])?,
-            parse_int(&version.elems[2])?,
-        );
-
-        Ok(ApiAttr {
-            version,
-            api_trait_path,
-        })
+        Ok(ApiDefineAttr { api_trait_paths })
     }
-}
-
-fn snake_case(s: &str) -> String {
-    let mut result = String::new();
-    for (i, ch) in s.char_indices() {
-        if i > 0 && ch.is_uppercase() {
-            result.push('_');
-        }
-        result.push(ch.to_lowercase().next().unwrap());
-    }
-    result
 }
 
 pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
-    let ApiAttr {
-        version: (version_major, version_minor, version_patch),
-        api_trait_path,
-    } = parse_macro_input!(attr as ApiAttr);
+    let ApiDefineAttr { api_trait_paths } = parse_macro_input!(attr as ApiDefineAttr);
+
+    assert_eq!(api_trait_paths.len(), 1, "Only 1 path permitted");
 
     let struct_name = &input.ident;
-    let api_trait_last_segment = api_trait_path
-        .segments
-        .last()
-        .expect("API trait path should have at least one segment")
-        .clone();
-    let api_trait_last_path = &api_trait_last_segment.ident;
-    let register_api_fn_name =
-        format_ident!("register_{}", snake_case(&api_trait_last_path.to_string()));
 
-    let doc_comment_register_api_fn = format!(
-        "Register one {} instance into the API registry",
-        api_trait_last_path
-    );
+    // Get all trait segments for a single make_trait_castable attribute
+    let trait_segments: Vec<_> = api_trait_paths
+        .iter()
+        .map(|path| {
+            path.segments
+                .last()
+                .expect("API trait path should have at least one segment")
+                .ident
+                .clone()
+        })
+        .collect();
 
-    let source_path = proc_macro::Span::call_site().source_file().path();
+    // Generate impl_api! calls for all trait paths
+    let impl_api_calls = api_trait_paths.iter().map(|path| {
+        let last_segment = path
+            .segments
+            .last()
+            .expect("API trait path should have at least one segment");
+        let constant_mod_ident = format_ident!(
+            "{}",
+            format!(
+                "{}",
+                snake_case(&format!("{}Constants", last_segment.ident))
+            )
+        );
+        quote! {
+            impl self::Api for #struct_name {
+                fn name(&self) -> &'static str {
+                    <dyn #last_segment as ApiConstant>::NAME
+                }
+                fn version(&self) -> self::Version {
+                    <dyn #last_segment as ApiConstant>::VERSION
+                }
+            }
+        }
+    });
+
+    // Generate register functions for all trait paths
+    let register_fns = api_trait_paths.iter().map(|path| {
+        let last_segment = path.segments.last()
+            .expect("API trait path should have at least one segment");
+        let api_trait_last_path = &last_segment.ident;
+        let register_api_fn_name = format_ident!("register_{}", snake_case(&api_trait_last_path.to_string()));
+        let doc_comment = format!("Register one {} instance into the API registry", api_trait_last_path);
+        let dyn_type_ident = dyn_ident(&last_segment.ident);
+        quote! {
+            #[doc = #doc_comment]
+            pub fn #register_api_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>) -> ApiHandle<dyn #api_trait_last_path> {
+                api_registry_api
+                    .get()
+                    .expect("Failed to get API registry api")
+                    .local_set::<#dyn_type_ident>(#struct_name::builder().build().into())
+            }
+        }
+    });
 
     let expanded = quote! {
-        // #[repr(C)]
-        #[make_trait_castable(Api, #api_trait_last_path)]
+        #[make_trait_castable(Api, #(#trait_segments),*)]
         #input
 
-        impl_api!(#struct_name, #api_trait_last_path, (#version_major, #version_minor, #version_patch));
+        #(#impl_api_calls)*
 
-        #[doc = #doc_comment_register_api_fn]
-        pub fn #register_api_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>) -> ApiHandle<dyn #api_trait_last_path> {
-            api_registry_api
-                .get()
-                .expect("Failed to get API registry api")
-                .set(constants::NAME, constants::VERSION, #struct_name::builder().build().into())
-                .downcast()
-        }
+        #(#register_fns)*
     };
 
     TokenStream::from(expanded)
 }
 
-pub fn define_api_with_id(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(item as DeriveInput);
-    let ApiAttr {
-        version: (version_major, version_minor, version_patch),
-        api_trait_path,
-    } = parse_macro_input!(attr as ApiAttr);
+// Structure to hold both version and path
+struct ApiDeclarationAttr {
+    version: Version,
+    path: syn::Path,
+}
 
-    let struct_name = &input.ident;
-    let api_trait_last_segment = api_trait_path
-        .segments
-        .last()
-        .expect("API trait path should have at least one segment")
-        .clone();
-    let api_trait_last_path = &api_trait_last_segment.ident;
-    let register_api_fn_name =
-        format_ident!("register_{}", snake_case(&api_trait_last_path.to_string()));
+// Parse implementation for ApiDeclaration
+impl Parse for ApiDeclarationAttr {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let version = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let path = input.parse()?;
 
-    let doc_comment_register_api_fn = format!(
-        "Register one {} instance into the API registry",
-        api_trait_last_path
+        Ok(ApiDeclarationAttr { version, path })
+    }
+}
+
+pub fn declare_api(args: TokenStream, item: TokenStream) -> TokenStream {
+    let ApiDeclarationAttr { version, path } = parse_macro_input!(args as ApiDeclarationAttr);
+    let input = parse_macro_input!(item as ItemTrait);
+    let trait_ident = &input.ident;
+    let major = version.major;
+    let minor = version.minor;
+    let patch = version.patch;
+
+    let constant_mod_ident = format_ident!(
+        "{}",
+        format!("{}", snake_case(&format!("{}Constants", trait_ident)))
     );
+    let dyn_type_ident = dyn_ident(trait_ident);
 
-    let source_path = proc_macro::Span::call_site().source_file().path();
+    // Generate implementation methods for each trait method
+    let methods = input
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let syn::TraitItem::Fn(method) = item {
+                let sig = &method.sig;
+                let name = &sig.ident;
+                let inputs = &sig.inputs;
+
+                // Extract argument names for forwarding
+                let args = inputs
+                    .iter()
+                    .skip(1)
+                    .filter_map(|arg| {
+                        if let syn::FnArg::Typed(pat_type) = arg {
+                            if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
+                                Some(&pat_ident.ident)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                let impl_method = quote! {
+                    #sig {
+                        (**self).#name(#(#args),*)
+                    }
+                };
+                Some(impl_method)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
 
     let expanded = quote! {
-        // #[repr(C)]
-        #[make_trait_castable(Api, #api_trait_last_path)]
-        #input
+        pub(crate) mod #constant_mod_ident {
+            use super::Version;
+            pub const NAME: &'static str = ::std::stringify!(#path);
+            pub const VERSION: self::Version = self::Version::new(
+                #major,
+                #minor,
+                #patch
+            );
+        }
+
+        impl ApiConstant for #dyn_type_ident {
+            const NAME: &'static str = #constant_mod_ident::NAME;
+
+            const VERSION: self::Version = #constant_mod_ident::VERSION;
+        }
+
+        pub type #dyn_type_ident = dyn #trait_ident;
 
         unique_id! {
-            #[UniqueTypeIdVersion((#version_major, #version_minor, #version_patch))]
-            dyn #api_trait_path
+            #[UniqueTypeIdVersion((#major, #minor, #patch))]
+            dyn #path
         }
 
-        impl_api!(#struct_name, #api_trait_last_path, (#version_major, #version_minor, #version_patch));
-
-        #[doc = #doc_comment_register_api_fn]
-        pub fn #register_api_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>) -> ApiHandle<dyn #api_trait_last_path> {
-            api_registry_api
-                .get()
-                .expect("Failed to get API registry api")
-                .set(constants::NAME, constants::VERSION, #struct_name::builder().build().into())
-                .downcast()
+        impl<T: #trait_ident + ?Sized> #trait_ident for Box<T> {
+            #(#methods)*
         }
+
+        #input
     };
 
     TokenStream::from(expanded)
