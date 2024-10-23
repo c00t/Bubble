@@ -69,9 +69,7 @@ pub unsafe extern "C" fn load_plugin(
     context.initialize();
     let api_guard = api_registry_api.get().unwrap();
 
-    let task_system_api = api_guard
-        .find(shared::constants::NAME, shared::constants::VERSION)
-        .downcast();
+    let task_system_api = api_guard.local_find::<dyn TaskSystemApi>();
 
     // let apis: ApiHandle<Box<dyn Api>> = task_system.into();
 

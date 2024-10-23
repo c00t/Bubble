@@ -10,3 +10,4 @@ bubble-core = {path = "../../app/bubble_core", default-features = false}
 bubble-tasks = {workspace = true}
 futures-channel = "0.3.31"
 thingbuf = "0.1.6"
+futures-util = "0.3.31"

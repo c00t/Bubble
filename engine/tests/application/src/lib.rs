@@ -3,9 +3,9 @@
 //! Some Api methods should only be called on the main thread.
 #![feature(ptr_metadata)]
 use bon::bon;
-use bubble_core::api::{define_api_with_id, prelude::*, Api};
+use bubble_core::api::{prelude::*, Api};
 
-#[define_api_with_id((0,1,0), application::ApplicationApi)]
+#[define_api(ApplicationApi)]
 struct Application {}
 
 #[bon]
@@ -22,6 +22,7 @@ impl ApplicationApi for Application {
     }
 }
 
+#[declare_api((0,1,0), application::ApplicationApi)]
 pub trait ApplicationApi: Api {
     // a tick future which should be run per frame
     fn tick(&self) -> async_ffi::FfiFuture<bool>;

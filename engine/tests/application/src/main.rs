@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 use std::{any::TypeId, sync::OnceLock, thread};
@@ -12,7 +13,9 @@ use bubble_core::{
 };
 use bubble_tasks::runtime::Runtime;
 use dlopen2::wrapper::{Container, WrapperApi};
+use rand::rngs::ThreadRng;
 use rand::Rng;
+use rand_distr::Distribution;
 use shared::{self as sd, TaskSystemApi, TraitCastableDropSub, TraitCastableDropSuper};
 
 #[derive(WrapperApi)]
@@ -465,18 +468,19 @@ pub struct Main {
 
 static COUNTER: AtomicI32 = AtomicI32::new(0);
 
-async fn long_running_async_task() -> String {
+async fn long_running_async_task(idx: i32) -> String {
     let mut rng = rand::thread_rng();
-    let x = rng.gen_range(10..100);
-    let y = rng.gen_range(100..1000);
-    // thread::sleep(Duration::from_micros(y));
-    bubble_tasks::runtime::time::sleep(Duration::from_micros(y)).await;
+    let normal = rand_distr::Normal::new(16.0, 10.0).unwrap();
+    let x = normal.sample(&mut rng);
+    let x = (x as u64).clamp(8, 100);
+    println!("in tick {idx}, wait {x} ms");
+    bubble_tasks::runtime::time::sleep(Duration::from_millis(x)).await;
     "Long Running Async Task".to_string()
 }
 
 pub async fn tick() -> bool {
     // let task_system_api = task_system.get().unwrap();
-    let counter = COUNTER.load(Ordering::SeqCst);
+    // let counter = COUNTER.load(Ordering::SeqCst);
     // random choose tasks
     /// A long running background task which should be run in the background.
     // fn long_running_blocking_task(index: i32, count: i32) -> String {
@@ -495,9 +499,9 @@ pub async fn tick() -> bool {
     //     println!("store a shader module to {}", shader_module);
     // }
     let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
-    long_running_async_task().await;
+    long_running_async_task(counter).await;
 
-    if counter == 10000 {
+    if counter == 200 {
         println!("in tick: {}, return false", counter);
         false
     } else {
@@ -529,7 +533,7 @@ fn main() {
     // 1. load plugin
     (container.load_plugin)(&context, api_registry_api.clone()); // task: strong count 1,2, api: clone then dropped
     (container2.load_plugin)(&context, api_registry_api.clone()); // task: strong count 3, api: clone then dropped
-
+    let x = api_registry_api.get().unwrap();
     // 2. set api
     println!("...");
     let task_system_api = shared::register_task_system_api(&api_registry_api); // task: strong count 4
@@ -583,7 +587,8 @@ fn main() {
     let q = api_registry_api
         .get()
         .unwrap()
-        .remove(shared::constants::NAME, shared::constants::VERSION);
+        .local_remove::<dyn TaskSystemApi>();
+    // .remove(shared::task_system_api_constants::NAME, shared::task_system_api_constants::VERSION);
     drop(q); // task: strong count 6
     container.unload_plugin(); // task: strong count 5
     container2.unload_plugin(); // task: strong count 4

@@ -61,11 +61,13 @@ struct MainRuntime(bubble_tasks::runtime::Runtime);
 unsafe impl Send for MainRuntime {}
 unsafe impl Sync for MainRuntime {}
 
-#[define_api_with_id((0,1,0), shared::TaskSystemApi)]
+#[define_api(TaskSystemApi)]
 struct TaskSystem {
     pub dispatcher: AtomicArc<std::sync::RwLock<Option<Dispatcher>>>,
     pub tick_sender: thingbuf::mpsc::blocking::Sender<bool>,
     pub tick_reader: thingbuf::mpsc::blocking::Receiver<bool>,
+    /// a timeout value which wait before tick to next frame.
+    pub tick_timeout: std::time::Duration,
     pub main_runtime: MainRuntime,
 }
 
@@ -74,6 +76,7 @@ pub fn get_task_system_api(
     thread_count: usize,
     thread_names: impl Fn(usize) -> String + 'static,
     frame_delay: usize,
+    tick_timeout: std::time::Duration,
 ) -> ApiHandle<dyn TaskSystemApi> {
     let dispatcher = Dispatcher::builder()
         .worker_threads(NonZeroUsize::new(thread_count).unwrap())
@@ -81,13 +84,17 @@ pub fn get_task_system_api(
         .build()
         .unwrap();
     let (sender, reader) = thingbuf::mpsc::blocking::channel(frame_delay);
+
     // queue a few frames to start with
-    sender.send(true).unwrap();
+    for _ in 0..frame_delay {
+        sender.send(true).unwrap();
+    }
     let main_runtime = MainRuntime(bubble_tasks::runtime::Runtime::new().unwrap());
     let task_system_api: AnyApiHandle = Box::new(TaskSystem {
         dispatcher: AtomicArc::new(std::sync::RwLock::new(Some(dispatcher))),
         tick_sender: sender,
         tick_reader: reader,
+        tick_timeout,
         main_runtime,
     })
     .into();
@@ -106,11 +113,17 @@ impl TaskSystem {
         for _ in 0..3 {
             sender.send(true).unwrap();
         }
-        let main_runtime = MainRuntime(bubble_tasks::runtime::Runtime::new().unwrap());
+        let main_runtime = MainRuntime(
+            bubble_tasks::runtime::RuntimeBuilder::new()
+                .name(Some("tick-main".into()))
+                .build()
+                .unwrap(),
+        );
         let task_system_api: AnyApiHandle = Box::new(TaskSystem {
             dispatcher: AtomicArc::new(std::sync::RwLock::new(Some(dispatcher))),
             tick_sender: sender,
             tick_reader: reader,
+            tick_timeout: Duration::from_millis(1000 / 60), // 60 fps
             main_runtime,
         })
         .into();
@@ -118,6 +131,7 @@ impl TaskSystem {
     }
 }
 
+#[declare_api((0,1,0), shared::TaskSystemApi)]
 pub trait TaskSystemApi: Api {
     /// Spawn a task on the current thread, and return a handle to it.
     ///
@@ -220,20 +234,42 @@ impl TaskSystemApi for TaskSystem {
                 if result {
                     println!("queue a tick");
                     // deatch queue next tick
+
+                    // get a timer, which shouldn't panic, i don't care it's value.
+                    let (tx, mut rx) = futures_channel::oneshot::channel();
+
                     unsafe {
                         self.main_runtime
                             .0
                             .spawn_unchecked(async {
-                                self.tick_sender.send(tick_task.await).unwrap();
+                                let timer_task = async {
+                                    bubble_tasks::runtime::time::sleep(self.tick_timeout).await;
+                                    tx.send(()).expect("frame timeout receiver dropped");
+                                };
+                                let (_, b) = futures_util::join!(timer_task, tick_task);
+                                self.tick_sender.send(b).unwrap();
                             })
                             .detach();
                     }
                     // loop till current has no more tasks
                     loop {
-                        self.main_runtime.0.poll_with(Some(Duration::ZERO));
                         let remaining_tasks = self.main_runtime.0.run();
-                        if !remaining_tasks {
+                        let timeout = rx.try_recv();
+                        if let Ok(Some(())) = timeout {
+                            // if timeout, exit loop
+                            println!("tick timeout, quit tick");
                             break;
+                        } else if let Err(e) = timeout {
+                            println!("tick timeout error");
+                            if !remaining_tasks {
+                                println!("timeout error, quit tick");
+                                break;
+                            }
+                        }
+                        if remaining_tasks {
+                            self.main_runtime.0.poll_with(Some(Duration::ZERO));
+                        } else {
+                            self.main_runtime.0.poll();
                         }
                     }
                     return true;
@@ -266,12 +302,12 @@ impl TaskSystemApi for TaskSystem {
                 loop {
                     // self.main_runtime.0.poll_with(Some(Duration::ZERO));
                     // some tick task finish
-                    print!("{}", self.tick_reader.len());
+                    println!("tick queue len: {}", self.tick_reader.len());
                     if self.tick_reader.len() != 0 {
                         break;
                     }
                     let remaining_tasks = self.main_runtime.0.run();
-                    print!("{}", remaining_tasks);
+                    println!("{}", remaining_tasks);
                     let mut timeout = if remaining_tasks {
                         Some(Duration::ZERO)
                     } else {
