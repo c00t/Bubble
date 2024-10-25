@@ -1,0 +1,22 @@
+omit_targets = []
+extra_srcs = []
+omit_srcs = []
+rustc_flags = []
+cfgs = []
+features = []
+omit_features = []
+extra_deps = []
+omit_deps = []
+cargo_env = false
+linker_flags = []
+
+[rustc_flags_select]
+
+[env]
+
+[[buildscript]]
+unresolved = 'Unresolved build script at ..\..\..\..\..\.cargo\git\checkouts\linkme-b4154518c3c22ac9\a318498\impl\build.rs.'
+
+[extra_mapped_srcs]
+
+[platform_fixup]

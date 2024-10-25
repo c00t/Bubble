@@ -45,13 +45,13 @@ vendor = false
 # # control)
 # checksum_exclude = []
 
-# Configuration for rustsec auditing
-[audit]
-# Name of a package which is expected to always have an advisory to make sure
-# the mechanism is working.
-never_autofix = [
-  "rustsec-example-crate", # never fix because this is a canary
-]
+# # Configuration for rustsec auditing
+# [audit]
+# # Name of a package which is expected to always have an advisory to make sure
+# # the mechanism is working.
+# never_autofix = [
+#   "rustsec-example-crate", # never fix because this is a canary
+# ]
 
 # Platforms we want to support.
 #
@@ -73,69 +73,69 @@ never_autofix = [
 # `named_platform_deps`. If it is "DEFAULT" then the platform's dependencies are
 # put into the normal `deps` / `named_deps`.
 
-# x86_64-unknown-linux-gnu
-[platform.linux-x86_64]
-x86_64-unknown-linux-gnu = []                      # true for a boolean test
-target_arch = ["x86_64"]
-target_endian = ["little"]
-target_env = ["gnu"]
-target_family = ["unix"]
-target_feature = ["fxsr", "sse", "sse2"]
-target_has_atomic = ["8", "16", "32", "64", "ptr"]
-target_os = ["linux"]
-target_pointer_width = ["64"]
-target_vendor = ["unknown"]
+# # x86_64-unknown-linux-gnu
+# [platform.linux-x86_64]
+# x86_64-unknown-linux-gnu = []                      # true for a boolean test
+# target_arch = ["x86_64"]
+# target_endian = ["little"]
+# target_env = ["gnu"]
+# target_family = ["unix"]
+# target_feature = ["fxsr", "sse", "sse2"]
+# target_has_atomic = ["8", "16", "32", "64", "ptr"]
+# target_os = ["linux"]
+# target_pointer_width = ["64"]
+# target_vendor = ["unknown"]
 
-# Fortanix SGX
-[platform.fortanix-sgx]
-x86_64-fortanix-unknown-sgx = []
-target_arch = ["x86_64"]
-target_endian = ["little"]
-target_env = ["sgx"]
-target_feature = ["fxsr", "rdrand", "rdseed", "sse", "sse2"]
-target_has_atomic = ["8", "16", "32", "64", "ptr"]
-target_os = ["unknown"]
-target_pointer_width = ["64"]
-target_vendor = ["fortanix"]
+# # Fortanix SGX
+# [platform.fortanix-sgx]
+# x86_64-fortanix-unknown-sgx = []
+# target_arch = ["x86_64"]
+# target_endian = ["little"]
+# target_env = ["sgx"]
+# target_feature = ["fxsr", "rdrand", "rdseed", "sse", "sse2"]
+# target_has_atomic = ["8", "16", "32", "64", "ptr"]
+# target_os = ["unknown"]
+# target_pointer_width = ["64"]
+# target_vendor = ["fortanix"]
 
-# macOS - x86_64-apple-darwin
-[platform.macos]
-x86_64-apple-darwin = []
-target_arch = ["x86_64"]
-target_endian = ["little"]
-target_env = []
-target_family = ["unix"]
-target_feature = ["cmpxchg16b", "fxsr", "sse", "sse2", "sse3", "ssse3"]
-target_has_atomic = ["8", "16", "32", "64", "128", "ptr"]
-target_os = ["macos"]
-target_pointer_width = ["64"]
-target_vendor = ["apple"]
+# # macOS - x86_64-apple-darwin
+# [platform.macos]
+# x86_64-apple-darwin = []
+# target_arch = ["x86_64"]
+# target_endian = ["little"]
+# target_env = []
+# target_family = ["unix"]
+# target_feature = ["cmpxchg16b", "fxsr", "sse", "sse2", "sse3", "ssse3"]
+# target_has_atomic = ["8", "16", "32", "64", "128", "ptr"]
+# target_os = ["macos"]
+# target_pointer_width = ["64"]
+# target_vendor = ["apple"]
 
-# Windows with MSVC toolchain - x86_64-pc-windows-msvc
-[platform.windows]
-x86_64-pc-windows-msvc = []
-target_arch = ["x86_64"]
-target_endian = ["little"]
-target_env = ["msvc"]
-target_family = ["windows"]
-target_feature = ["fxsr", "sse", "sse2"]
-target_has_atomic = ["8", "16", "32", "64", "ptr"]
-target_os = ["windows"]
-target_pointer_width = ["64"]
-target_vendor = ["pc"]
+# # Windows with MSVC toolchain - x86_64-pc-windows-msvc
+# [platform.windows]
+# x86_64-pc-windows-msvc = []
+# target_arch = ["x86_64"]
+# target_endian = ["little"]
+# target_env = ["msvc"]
+# target_family = ["windows"]
+# target_feature = ["fxsr", "sse", "sse2"]
+# target_has_atomic = ["8", "16", "32", "64", "ptr"]
+# target_os = ["windows"]
+# target_pointer_width = ["64"]
+# target_vendor = ["pc"]
 
-# Windows with GNU toolchain - x86_64-pc-windows-gnu
-[platform.windows-gnu]
-x86_64-pc-windows-gnu = []
-target_arch = ["x86_64"]
-target_endian = ["little"]
-target_env = ["gnu"]
-target_family = ["windows"]
-target_feature = ["fxsr", "sse", "sse2"]
-target_has_atomic = ["8", "16", "32", "64", "ptr"]
-target_os = ["windows"]
-target_pointer_width = ["64"]
-target_vendor = ["pc"]
+# # Windows with GNU toolchain - x86_64-pc-windows-gnu
+# [platform.windows-gnu]
+# x86_64-pc-windows-gnu = []
+# target_arch = ["x86_64"]
+# target_endian = ["little"]
+# target_env = ["gnu"]
+# target_family = ["windows"]
+# target_feature = ["fxsr", "sse", "sse2"]
+# target_has_atomic = ["8", "16", "32", "64", "ptr"]
+# target_os = ["windows"]
+# target_pointer_width = ["64"]
+# target_vendor = ["pc"]
 
 # Configuration for cargo (used both for vendoring and resolving dependencies)
 [cargo]
@@ -150,7 +150,7 @@ target_vendor = ["pc"]
 # Support Cargo's unstable "artifact dependencies" functionality, RFC 3028.
 # This requires a version of Cargo containing
 # https://github.com/rust-lang/cargo/pull/11550.
-# bindeps = false
+bindeps = true
 
 # Configuration for generated BUCK file
 [buck]

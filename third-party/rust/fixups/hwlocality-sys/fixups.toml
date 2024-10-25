@@ -1,0 +1,8 @@
+# extra_deps = ["//third-party/cpp:hwloc"]
+# rustc_flags = ["-lstatic=hwloc"]
+# linker_flags = ["$(location //third-party/cpp:hwloc[static])"]
+
+
+# disalble it's build.rs
+[[buildscript]]
+unresolved = 'Unresolved build script at ..\..\..\..\..\.cargo\git\checkouts\linkme-b4154518c3c22ac9\a318498\impl\build.rs.'

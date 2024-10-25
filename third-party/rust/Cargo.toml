@@ -15,5 +15,8 @@ path = "top/main.rs"
 rustversion = "1.0"
 inventory = "0.3"
 linkme = { git = "https://github.com/dtolnay/linkme.git" }
+hwlocality = { version = "1.0.0-alpha.6", features = ["hwloc-2_4_0", "vendored"] }
+errno = "0.3.9"
+windows-sys = "0.59.0"
 
 [patch.crates-io]

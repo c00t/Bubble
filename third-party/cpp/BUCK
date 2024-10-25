@@ -1,0 +1,51 @@
+load("@prelude//cxx:install_vcpkg.bzl", "install_vcpkgs")
+
+git_fetch(
+    name = "vcpkg.git",
+    repo = "https://github.com/microsoft/vcpkg",
+    rev = "cff6ed45719c0162fa7065fdac90506a0add812c",
+)
+
+install_vcpkgs(
+    name  = "vcpkg_install",
+    dir = ":vcpkg.git",
+   # triple = "arm64-osx-release",
+   # triple = "x64-linux-release"
+   # triple = "x64-windows-release"
+    c_compiler = select({
+        "prelude//os:linux": "clang",
+        "prelude//os:macos": select({
+            "prelude//cpu:arm64": "/opt/homebrew/opt/llvm/bin/clang",
+
+            "prelude//cpu:x86_64": "/opt/homebrew/opt/llvm/bin/clang",
+        }),
+        "prelude//os:windows": "clang"}),
+    cxx_compiler = select({
+        "prelude//os:linux": "clang",
+        "prelude//os:macos": select({
+            "prelude//cpu:arm64": "/opt/homebrew/opt/llvm/bin/clang++",
+            "prelude//cpu:x86_64": "/opt/homebrew/opt/llvm/bin/clang++",
+        }),
+        "prelude//os:windows": "clang"}),
+    manifest = "./third-party/cpp/vcpkg.json",
+    visibility = ["PUBLIC"]
+)
+
+prebuilt_cxx_library(
+    name = "hwloc",
+    header_only = False,
+    exported_headers = {"hwloc.h": "./vcpkg/include/hwloc.h"},
+    header_namespace = "",
+    static_lib = select({
+        "prelude//os:linux": "./vcpkg/lib/libhwloc.a",
+        "prelude//os:macos": "./vcpkg/lib/libhwloc.a",
+        "prelude//os:windows": "./vcpkg/lib/hwloc.lib"}),
+    exported_linker_flags = select({
+        "prelude//os:linux": [],
+        "prelude//os:macos": [],
+        "prelude//os:windows": [
+            "/LIBPATH:./third-party/cpp/vcpkg/lib"
+        ]
+    }),
+    visibility = ["PUBLIC"]
+)
