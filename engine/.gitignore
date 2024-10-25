@@ -18,3 +18,5 @@ target/
 .vscode/settings.json
 
 Cargo.lock
+
+env.ps1
