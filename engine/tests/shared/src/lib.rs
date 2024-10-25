@@ -1,5 +1,6 @@
 #![feature(ptr_metadata)]
 #![feature(once_cell_get_mut)]
+use std::num::NonZero;
 use std::sync::OnceLock;
 use std::{num::NonZeroUsize, time::Duration};
 
@@ -11,6 +12,14 @@ use bubble_core::{
     thread_local,
 };
 use bubble_tasks::dispatcher::Dispatcher;
+use bubble_tasks::AffinityHint;
+use futures_channel::oneshot;
+use hwlocality::cpu::binding::CpuBindingFlags;
+use hwlocality::cpu::cpuset::CpuSet;
+use hwlocality::cpu::kind::{CpuEfficiency, CpuKind};
+use hwlocality::object::depth::NormalDepth;
+use hwlocality::topology::support::{CpuBindingSupport, DiscoverySupport};
+use hwlocality::Topology;
 
 pub trait TraitCastableDropSuper {
     fn super_func(&self);
@@ -63,39 +72,151 @@ unsafe impl Sync for MainRuntime {}
 
 #[define_api(TaskSystemApi)]
 struct TaskSystem {
-    pub dispatcher: AtomicArc<std::sync::RwLock<Option<Dispatcher>>>,
+    pub performance_dispatcher: AtomicArc<std::sync::RwLock<Option<Dispatcher>>>,
+    pub efficiency_dispatcher: Option<AtomicArc<std::sync::RwLock<Option<Dispatcher>>>>,
     pub tick_sender: thingbuf::mpsc::blocking::Sender<bool>,
     pub tick_reader: thingbuf::mpsc::blocking::Receiver<bool>,
     /// a timeout value which wait before tick to next frame.
     pub tick_timeout: std::time::Duration,
     pub main_runtime: MainRuntime,
+    pub num_threads: usize,
 }
 
-#[builder]
-pub fn get_task_system_api(
-    thread_count: usize,
-    thread_names: impl Fn(usize) -> String + 'static,
-    frame_delay: usize,
-    tick_timeout: std::time::Duration,
-) -> ApiHandle<dyn TaskSystemApi> {
-    let dispatcher = Dispatcher::builder()
-        .worker_threads(NonZeroUsize::new(thread_count).unwrap())
-        .thread_names(thread_names)
-        .build()
-        .unwrap();
-    let (sender, reader) = thingbuf::mpsc::blocking::channel(frame_delay);
+#[derive(Debug)]
+pub(crate) struct HwCpuBindingLocality {
+    pub binding_support: CpuBindingSupport,
+    pub discovery_support: DiscoverySupport,
+    pub cpu_kinds: Vec<(CpuSet, Option<CpuEfficiency>)>,
+}
 
-    // queue a few frames to start with
+impl HwCpuBindingLocality {
+    pub fn new(topology: &Option<Topology>) -> Option<Self> {
+        let topology = topology.as_ref()?;
+        let feature_support = topology.feature_support();
+        let binding_support = feature_support.cpu_binding()?.clone();
+        // check is thread binding supported
+        if !binding_support.get_current_thread() {
+            return None;
+        }
+        let discovery_support = feature_support.discovery()?.clone();
+        let cpu_kinds = topology
+            .cpu_kinds()
+            .ok()?
+            .map(|kind| {
+                let kind = kind.clone();
+                (kind.cpuset, kind.efficiency)
+            })
+            .collect();
+        Some(Self {
+            binding_support,
+            discovery_support,
+            cpu_kinds,
+        })
+    }
+    /// Split the cpu kinds into two groups, the first group is the most power-efficient kind,
+    /// the second group is the rest kinds. If there is only one kind, the second group will be `None`.
+    pub fn split_to_two_kinds(&self) -> (CpuSet, Option<CpuSet>) {
+        let mut iter = self.cpu_kinds.iter();
+        let (first_set, _) = iter.next().unwrap();
+        if self.cpu_kinds.len() == 1 {
+            return (first_set.clone(), None);
+        }
+        let second_set = iter.fold(CpuSet::new(), |acc, (set, _)| acc | set);
+        (first_set.clone(), Some(second_set))
+    }
+}
+
+pub fn get_task_system_api(
+    thread_count: (usize, Option<usize>),
+    tick_timeout: Duration,
+    frame_delay: usize,
+) -> ApiHandle<dyn TaskSystemApi> {
+    let topology = Topology::new().ok();
+    let cpu_locality = HwCpuBindingLocality::new(&topology).and_then(|locality| {
+        let (first_set, second_set) = locality.split_to_two_kinds();
+        Some((first_set, second_set))
+    });
+
+    let (performance_dispatcher, efficiency_dispatcher) = cpu_locality.map_or_else(
+        || {
+            let p_dispatcher = Dispatcher::builder()
+                .thread_names(|index| format!("performance-{index}"))
+                .worker_threads(NonZero::new(thread_count.0).unwrap())
+                .build()
+                .unwrap();
+            (p_dispatcher, None)
+        },
+        |(first_set, second_set)| {
+            let topology = topology.unwrap();
+            match (first_set, second_set) {
+                (first_set, None) => {
+                    let topology_clone = topology.clone();
+                    let p_dispatcher = Dispatcher::builder()
+                        .thread_names(|index| format!("performance-{index}"))
+                        .worker_threads(NonZero::new(thread_count.0).unwrap())
+                        .build()
+                        .unwrap();
+                    (p_dispatcher, None)
+                }
+                (first_set, Some(second_set)) => {
+                    let topology_clone = topology.clone();
+                    let p_dispatcher = Dispatcher::builder()
+                        .thread_names(|index| format!("performance-{index}"))
+                        .on_thread_start(move || {
+                            topology_clone
+                                .bind_cpu(&first_set, CpuBindingFlags::THREAD)
+                                .ok();
+                        })
+                        .worker_threads(
+                            NonZero::new(thread_count.1.unwrap_or(thread_count.0)).unwrap(),
+                        )
+                        .build()
+                        .unwrap();
+                    let topology_clone = topology.clone();
+                    let e_dispatcher = Dispatcher::builder()
+                        .thread_names(|index| format!("efficiency-{index}"))
+                        .on_thread_start(move || {
+                            topology_clone
+                                .bind_cpu(&second_set, CpuBindingFlags::THREAD)
+                                .ok();
+                        })
+                        .worker_threads(
+                            NonZero::new(thread_count.1.unwrap_or(thread_count.1.unwrap()))
+                                .unwrap(),
+                        )
+                        .build()
+                        .unwrap();
+                    (p_dispatcher, Some(e_dispatcher))
+                }
+            }
+        },
+    );
+
+    let num_threads = performance_dispatcher.num_threads();
+    let (sender, reader) = thingbuf::mpsc::blocking::channel(frame_delay);
     for _ in 0..frame_delay {
         sender.send(true).unwrap();
     }
-    let main_runtime = MainRuntime(bubble_tasks::runtime::Runtime::new().unwrap());
+    let main_runtime = MainRuntime(
+        bubble_tasks::runtime::RuntimeBuilder::new()
+            .name(Some("tick-main".into()))
+            .build()
+            .unwrap(),
+    );
     let task_system_api: AnyApiHandle = Box::new(TaskSystem {
-        dispatcher: AtomicArc::new(std::sync::RwLock::new(Some(dispatcher))),
+        performance_dispatcher: AtomicArc::new(std::sync::RwLock::new(Some(
+            performance_dispatcher,
+        ))),
+        efficiency_dispatcher: if let Some(e_dispatcher) = efficiency_dispatcher {
+            Some(AtomicArc::new(std::sync::RwLock::new(Some(e_dispatcher))))
+        } else {
+            None
+        },
         tick_sender: sender,
         tick_reader: reader,
         tick_timeout,
         main_runtime,
+        num_threads,
     })
     .into();
     task_system_api.downcast()
@@ -105,10 +226,59 @@ pub fn get_task_system_api(
 impl TaskSystem {
     #[builder]
     pub fn new() -> ApiHandle<dyn TaskSystemApi> {
-        let dispatcher = Dispatcher::builder()
-            .thread_names(|index| format!("compio-worker-{index}"))
-            .build()
-            .unwrap();
+        let topology = Topology::new().ok();
+        let cpu_locality = HwCpuBindingLocality::new(&topology).and_then(|locality| {
+            let (first_set, second_set) = locality.split_to_two_kinds();
+            Some((first_set, second_set))
+        });
+
+        let (performance_dispatcher, efficiency_dispatcher) = cpu_locality.map_or_else(
+            || {
+                let p_dispatcher = Dispatcher::builder()
+                    .thread_names(|index| format!("performance-{index}"))
+                    .build()
+                    .unwrap();
+                (p_dispatcher, None)
+            },
+            |(first_set, second_set)| {
+                let topology = topology.unwrap();
+                match (first_set, second_set) {
+                    (first_set, None) => {
+                        let topology_clone = topology.clone();
+                        let p_dispatcher = Dispatcher::builder()
+                            .thread_names(|index| format!("performance-{index}"))
+                            .build()
+                            .unwrap();
+                        (p_dispatcher, None)
+                    }
+                    (first_set, Some(second_set)) => {
+                        let topology_clone = topology.clone();
+                        let p_dispatcher = Dispatcher::builder()
+                            .thread_names(|index| format!("performance-{index}"))
+                            .on_thread_start(move || {
+                                topology_clone
+                                    .bind_cpu(&first_set, CpuBindingFlags::THREAD)
+                                    .ok();
+                            })
+                            .build()
+                            .unwrap();
+                        let topology_clone = topology.clone();
+                        let e_dispatcher = Dispatcher::builder()
+                            .thread_names(|index| format!("efficiency-{index}"))
+                            .on_thread_start(move || {
+                                topology_clone
+                                    .bind_cpu(&second_set, CpuBindingFlags::THREAD)
+                                    .ok();
+                            })
+                            .build()
+                            .unwrap();
+                        (p_dispatcher, Some(e_dispatcher))
+                    }
+                }
+            },
+        );
+
+        let num_threads = performance_dispatcher.num_threads();
         let (sender, reader) = thingbuf::mpsc::blocking::channel(3);
         for _ in 0..3 {
             sender.send(true).unwrap();
@@ -120,17 +290,28 @@ impl TaskSystem {
                 .unwrap(),
         );
         let task_system_api: AnyApiHandle = Box::new(TaskSystem {
-            dispatcher: AtomicArc::new(std::sync::RwLock::new(Some(dispatcher))),
+            performance_dispatcher: AtomicArc::new(std::sync::RwLock::new(Some(
+                performance_dispatcher,
+            ))),
+            efficiency_dispatcher: if let Some(e_dispatcher) = efficiency_dispatcher {
+                Some(AtomicArc::new(std::sync::RwLock::new(Some(e_dispatcher))))
+            } else {
+                None
+            },
             tick_sender: sender,
             tick_reader: reader,
             tick_timeout: Duration::from_millis(1000 / 60), // 60 fps
             main_runtime,
+            num_threads,
         })
         .into();
         task_system_api.downcast()
     }
 }
 
+/// Task system api
+///
+/// Run async task on the task system.
 #[declare_api((0,1,0), shared::TaskSystemApi)]
 pub trait TaskSystemApi: Api {
     /// Spawn a task on the current thread, and return a handle to it.
@@ -138,15 +319,30 @@ pub trait TaskSystemApi: Api {
     /// The task will be executed on the current thread, and the handle will be returned immediately.
     /// `bubble_tasks` is a per-core runtime library, so the task will be executed on the current core.
     fn spawn(&self, fut: async_ffi::LocalFfiFuture<()>) -> bubble_tasks::runtime::JoinHandle<()>;
-    /// Dispatch a task to the task system, and return a future to it.
+    /// Dispatch a task to the task system, and return a receiver to it.
+    ///
+    /// ## Note
+    ///
+    /// The [`oneshot::Receiver`] returned by this function will be notified when the task is finished. If you don't care about
+    /// whether the task is finished or not, just ignore the [`oneshot::Receiver`]. It doesn't matter whether the [`oneshot::Receiver`] is dropped or not,
+    /// the task will be executed to the end anyway.
+    ///
+    /// The task system should just ignore the error returned from [`oneshot::Sender::send`].
+    ///
+    /// ## Affinity hint
+    ///
+    /// If the underlying implementation supports affinity hint, the task system will
+    /// try to run the task on the thread pool which bind to cores with the same affinity hint.
     fn dispatch(
         &self,
+        affinity_hint: Option<bubble_tasks::AffinityHint>,
         fut: async_ffi::FfiFuture<()>,
-    ) -> async_ffi::FfiFuture<Result<(), futures_channel::oneshot::Canceled>>;
+    ) -> Result<oneshot::Receiver<()>, ()>;
     fn dispatch_blocking(
         &self,
+        affinity_hint: Option<bubble_tasks::AffinityHint>,
         func: Box<dyn FnOnce() -> () + Send + 'static>,
-    ) -> async_ffi::FfiFuture<Result<(), futures_channel::oneshot::Canceled>>;
+    ) -> Result<oneshot::Receiver<()>, ()>;
     /// Shutdown the task system.
     ///
     /// Use a temp unsafe implementation to check atomic counter
@@ -160,6 +356,8 @@ pub trait TaskSystemApi: Api {
     ///
     /// 2 or more tick task may be executed parallelly on different threads, so you should be careful about the data race.
     unsafe fn tick(&self, tick_task: async_ffi::LocalFfiFuture<bool>) -> bool;
+    /// Get the number of worker threads in the task system dispatcher.
+    fn num_threads(&self) -> usize;
 }
 
 impl TaskSystemApi for TaskSystem {
@@ -169,46 +367,86 @@ impl TaskSystemApi for TaskSystem {
 
     fn dispatch(
         &self,
+        affinity_hint: Option<bubble_tasks::AffinityHint>,
         fut: async_ffi::FfiFuture<()>,
-    ) -> async_ffi::FfiFuture<Result<(), futures_channel::oneshot::Canceled>> {
-        let result = self
-            .dispatcher
-            .load()
-            .unwrap()
-            .read()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .dispatch(|| fut)
-            .unwrap();
-        result.into_ffi()
+    ) -> Result<oneshot::Receiver<()>, ()> {
+        if affinity_hint.is_none()
+            || self.efficiency_dispatcher.is_none()
+            || affinity_hint == Some(AffinityHint::Performance)
+        {
+            let result = self
+                .performance_dispatcher
+                .load()
+                .unwrap()
+                .read()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .dispatch(|| fut)
+                .unwrap();
+            Ok(result)
+        } else {
+            let result = self
+                .efficiency_dispatcher
+                .as_ref()
+                .unwrap()
+                .load()
+                .unwrap()
+                .read()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .dispatch(|| fut)
+                .unwrap();
+            Ok(result)
+        }
     }
 
     fn dispatch_blocking(
         &self,
+        affinity_hint: Option<bubble_tasks::AffinityHint>,
         func: Box<dyn FnOnce() -> () + Send + 'static>,
-    ) -> async_ffi::FfiFuture<Result<(), futures_channel::oneshot::Canceled>> {
-        let result = self
-            .dispatcher
-            .load()
-            .unwrap()
-            .read()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .dispatch_blocking(func)
-            .unwrap();
-        result.into_ffi()
+    ) -> Result<oneshot::Receiver<()>, ()> {
+        if affinity_hint.is_none()
+            || self.efficiency_dispatcher.is_none()
+            || affinity_hint == Some(AffinityHint::Performance)
+        {
+            let result = self
+                .performance_dispatcher
+                .load()
+                .unwrap()
+                .read()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .dispatch_blocking(func)
+                .unwrap();
+            Ok(result)
+        } else {
+            let result = self
+                .efficiency_dispatcher
+                .as_ref()
+                .unwrap()
+                .load()
+                .unwrap()
+                .read()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .dispatch_blocking(func)
+                .unwrap();
+            Ok(result)
+        }
     }
 
     fn shutdown(&self) {
-        let mut dispatcher = self.dispatcher.load();
+        let mut dispatcher = self.performance_dispatcher.load();
         let null_arc = bubble_core::sync::Arc::new(std::sync::RwLock::new(None));
 
         loop {
             let dispatcher_ptr = dispatcher.as_ref().map_or(std::ptr::null(), AsPtr::as_ptr);
             match self
-                .dispatcher
+                .performance_dispatcher
                 .compare_exchange(dispatcher_ptr, Some(&null_arc))
             {
                 Ok(()) => break,
@@ -324,5 +562,10 @@ impl TaskSystemApi for TaskSystem {
             }
         });
         r
+    }
+
+    /// Get the number of worker threads in the task system dispatcher.
+    fn num_threads(&self) -> usize {
+        self.num_threads
     }
 }

@@ -27,16 +27,15 @@ pub struct PluginApi {
     unload_plugin: fn(),
 }
 
-pub fn test_dynamic_tls(container: &'static Container<PluginApi>) {
+pub fn test_dynamic_tls_std_thread(container: &'static Container<PluginApi>) {
     let handle = thread::spawn(|| {
-        // use bubble_core TEST_VAR as a example
         let _x = {
             shared::TEST_VAR.with(|x| {
                 let mut guard = x.lock().unwrap();
-                println!("host:{}", *guard);
+                println!("new thread host:{}", *guard);
                 assert_eq!(*guard, 0);
                 *guard = 42;
-                println!("host:{}", *guard);
+                println!("new thread host:{}", *guard);
                 assert_eq!(*guard, 42);
                 drop(guard);
             });
@@ -47,16 +46,43 @@ pub fn test_dynamic_tls(container: &'static Container<PluginApi>) {
         let _x = {
             shared::TEST_VAR.with(|x| {
                 let mut guard = x.lock().unwrap();
-                println!("host:{}", *guard);
+                println!("new thread host:{}", *guard);
                 assert_eq!(*guard, 43);
                 *guard = 42;
-                println!("host:{}", *guard);
+                println!("new thread host:{}", *guard);
                 assert_eq!(*guard, 42);
                 drop(guard);
             });
             0
         };
     });
+    // test in current thread
+    let _x = {
+        shared::TEST_VAR.with(|x| {
+            let mut guard = x.lock().unwrap();
+            println!("current thread host:{}", *guard);
+            assert_eq!(*guard, 0);
+            *guard = 41;
+            println!("current thread host:{}", *guard);
+            assert_eq!(*guard, 41);
+            drop(guard);
+        });
+        0
+    };
+    // test_func
+    (container.test_dynamic_tls)();
+    let _x = {
+        shared::TEST_VAR.with(|x| {
+            let mut guard = x.lock().unwrap();
+            println!("current thread host:{}", *guard);
+            assert_eq!(*guard, 43);
+            *guard = 41;
+            println!("current thread host:{}", *guard);
+            assert_eq!(*guard, 41);
+            drop(guard);
+        });
+        0
+    };
 
     handle.join().unwrap();
 }
@@ -70,6 +96,7 @@ pub fn test_bubble_tasks(container: &std::sync::Arc<Container<PluginApi>>) {
     // meature time
     let start = std::time::Instant::now();
     let r = main_struct.task_system_api.get().unwrap().dispatch(
+        None,
         async move {
             println!(
                 "(StdId)main_thread(dispatch): {:?}",
@@ -94,7 +121,7 @@ pub fn test_bubble_tasks(container: &std::sync::Arc<Container<PluginApi>>) {
     );
 
     let runtime = Runtime::new().unwrap();
-    let _ = runtime.block_on(r);
+    let _ = runtime.block_on(r.unwrap());
     println!(
         "test_bubble_tasks time: {:?}, it's should be 10s",
         start.elapsed()
@@ -538,6 +565,11 @@ fn main() {
     println!("...");
     let task_system_api = shared::register_task_system_api(&api_registry_api); // task: strong count 4
     println!("{:?}", task_system_api);
+    println!(
+        "num_threads: {}",
+        task_system_api.get().unwrap().num_threads()
+    );
+
     println!("...");
     let _ = MAIN.get_or_init(|| {
         AtomicArc::new(Main {
@@ -557,8 +589,8 @@ fn main() {
 
     // TEST1
     println!("--TEST1->");
-    test_dynamic_tls(&container);
-    test_dynamic_tls(&container2);
+    test_dynamic_tls_std_thread(&container);
+    // test_dynamic_tls_tasks_thread(&container2);
     println!("<-TEST1--");
 
     // TEST2

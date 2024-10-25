@@ -169,40 +169,43 @@ async fn plugin_task(s: String) -> String {
             let task_system_api = global_api.get().unwrap();
             for i in 0..2 {
                 handles.push(
-                    task_system_api.dispatch(
-                        async move {
-                            // let filename = format!("test0.txt");
-                            // let file = bubble_tasks::fs::File::open(filename).await.unwrap();
-                            // let (read, buffer) = file
-                            //     .read_to_end_at(Vec::with_capacity(1024), 0)
-                            //     .await
-                            //     .unwrap();
-                            // assert_eq!(read, buffer.len());
-                            // print thread id
-                            println!(
-                                "(StdId)plugin_thread(loop{}): {:?}",
-                                i,
-                                std::thread::current().id()
-                            );
-                            bubble_tasks::runtime::time::sleep(Duration::from_secs(2)).await;
-                            println!(
-                                "(SysId)plugin_thread(loop{}): {:?}",
-                                i,
-                                SysThreadId::current()
-                            );
-                            println!(
-                                "(StdName)plugin_thread(loop{}): {:?}",
-                                i,
-                                std::thread::current().name()
-                            );
-                            println!(
-                                "(RuntimeName)plugin_thread(loop{}): {:?}",
-                                i,
-                                Runtime::name()
-                            );
-                        }
-                        .into_ffi(),
-                    ),
+                    task_system_api
+                        .dispatch(
+                            None,
+                            async move {
+                                // let filename = format!("test0.txt");
+                                // let file = bubble_tasks::fs::File::open(filename).await.unwrap();
+                                // let (read, buffer) = file
+                                //     .read_to_end_at(Vec::with_capacity(1024), 0)
+                                //     .await
+                                //     .unwrap();
+                                // assert_eq!(read, buffer.len());
+                                // print thread id
+                                println!(
+                                    "(StdId)plugin_thread(loop{}): {:?}",
+                                    i,
+                                    std::thread::current().id()
+                                );
+                                bubble_tasks::runtime::time::sleep(Duration::from_secs(2)).await;
+                                println!(
+                                    "(SysId)plugin_thread(loop{}): {:?}",
+                                    i,
+                                    SysThreadId::current()
+                                );
+                                println!(
+                                    "(StdName)plugin_thread(loop{}): {:?}",
+                                    i,
+                                    std::thread::current().name()
+                                );
+                                println!(
+                                    "(RuntimeName)plugin_thread(loop{}): {:?}",
+                                    i,
+                                    Runtime::name()
+                                );
+                            }
+                            .into_ffi(),
+                        )
+                        .unwrap(),
                 );
             }
             let instant = Instant::now();
@@ -213,12 +216,17 @@ async fn plugin_task(s: String) -> String {
         .into_local_ffi(),
     );
     // drop(task_system_global_api);
-    let y = task_system_api.dispatch_blocking(Box::new(|| {
-        println!("before dispatch blocking sleep");
-        std::thread::sleep(Duration::from_secs(10));
-        println!("after dispatch blocking sleep");
-        1;
-    }));
+    let y = task_system_api
+        .dispatch_blocking(
+            None,
+            Box::new(|| {
+                println!("before dispatch blocking sleep");
+                std::thread::sleep(Duration::from_secs(10));
+                println!("after dispatch blocking sleep");
+                1;
+            }),
+        )
+        .unwrap();
     println!("{:?}", futures_util::join!(x, y));
 
     "xxx".to_string()
