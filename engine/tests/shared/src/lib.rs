@@ -164,12 +164,10 @@ pub fn get_task_system_api(
                         .thread_names(|index| format!("performance-{index}"))
                         .on_thread_start(move || {
                             topology_clone
-                                .bind_cpu(&first_set, CpuBindingFlags::THREAD)
+                                .bind_cpu(&second_set, CpuBindingFlags::THREAD)
                                 .ok();
                         })
-                        .worker_threads(
-                            NonZero::new(thread_count.1.unwrap_or(thread_count.0)).unwrap(),
-                        )
+                        .worker_threads(NonZero::new(thread_count.0).unwrap())
                         .build()
                         .unwrap();
                     let topology_clone = topology.clone();
@@ -177,12 +175,11 @@ pub fn get_task_system_api(
                         .thread_names(|index| format!("efficiency-{index}"))
                         .on_thread_start(move || {
                             topology_clone
-                                .bind_cpu(&second_set, CpuBindingFlags::THREAD)
+                                .bind_cpu(&first_set, CpuBindingFlags::THREAD)
                                 .ok();
                         })
                         .worker_threads(
-                            NonZero::new(thread_count.1.unwrap_or(thread_count.1.unwrap()))
-                                .unwrap(),
+                            NonZero::new(thread_count.1.unwrap_or(thread_count.0)).unwrap(),
                         )
                         .build()
                         .unwrap();
@@ -257,7 +254,7 @@ impl TaskSystem {
                             .thread_names(|index| format!("performance-{index}"))
                             .on_thread_start(move || {
                                 topology_clone
-                                    .bind_cpu(&first_set, CpuBindingFlags::THREAD)
+                                    .bind_cpu(&second_set, CpuBindingFlags::THREAD)
                                     .ok();
                             })
                             .build()
@@ -267,7 +264,7 @@ impl TaskSystem {
                             .thread_names(|index| format!("efficiency-{index}"))
                             .on_thread_start(move || {
                                 topology_clone
-                                    .bind_cpu(&second_set, CpuBindingFlags::THREAD)
+                                    .bind_cpu(&first_set, CpuBindingFlags::THREAD)
                                     .ok();
                             })
                             .build()
