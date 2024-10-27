@@ -1,6 +1,7 @@
 #![feature(ptr_metadata)]
 #![feature(once_cell_get_mut)]
 use std::num::NonZero;
+use std::sync::atomic::AtomicBool;
 use std::sync::OnceLock;
 use std::{num::NonZeroUsize, time::Duration};
 
@@ -70,6 +71,33 @@ struct MainRuntime(bubble_tasks::runtime::Runtime);
 unsafe impl Send for MainRuntime {}
 unsafe impl Sync for MainRuntime {}
 
+#[derive(Debug, Clone)]
+pub struct CancellableTicket(std::sync::Arc<(AtomicBool, AtomicBool)>);
+
+impl CancellableTicket {
+    pub fn new() -> Self {
+        Self(std::sync::Arc::new((
+            AtomicBool::new(false),
+            AtomicBool::new(false),
+        )))
+    }
+
+    pub fn set_allow_cancel(&self, allow: bool) {
+        self.0 .0.store(allow, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn allow_cancel(&self) -> bool {
+        self.0 .0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn cancel(&self) {
+        self.0 .1.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_canceled(&self) -> bool {
+        self.0 .1.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
 #[define_api(TaskSystemApi)]
 struct TaskSystem {
     pub performance_dispatcher: AtomicArc<std::sync::RwLock<Option<Dispatcher>>>,
@@ -80,6 +108,9 @@ struct TaskSystem {
     pub tick_timeout: std::time::Duration,
     pub main_runtime: MainRuntime,
     pub num_threads: usize,
+    next_calcellation_id: std::sync::atomic::AtomicU64,
+    cancellable_tickets:
+        std::sync::RwLock<std::collections::HashMap<CalcellationId, CancellableTicket>>,
 }
 
 #[derive(Debug)]
@@ -194,6 +225,7 @@ pub fn get_task_system_api(
     for _ in 0..frame_delay {
         sender.send(true).unwrap();
     }
+    // TODO: may be we should use the same proactor builder of the performance dispatchers?
     let main_runtime = MainRuntime(
         bubble_tasks::runtime::RuntimeBuilder::new()
             .name(Some("tick-main".into()))
@@ -214,6 +246,8 @@ pub fn get_task_system_api(
         tick_timeout,
         main_runtime,
         num_threads,
+        next_calcellation_id: std::sync::atomic::AtomicU64::new(0),
+        cancellable_tickets: std::sync::RwLock::new(std::collections::HashMap::new()),
     })
     .into();
     task_system_api.downcast()
@@ -300,27 +334,97 @@ impl TaskSystem {
             tick_timeout: Duration::from_millis(1000 / 60), // 60 fps
             main_runtime,
             num_threads,
+            next_calcellation_id: std::sync::atomic::AtomicU64::new(0),
+            cancellable_tickets: std::sync::RwLock::new(std::collections::HashMap::new()),
         })
         .into();
         task_system_api.downcast()
     }
+
+    fn get_next_calcellation_id(&self) -> CalcellationId {
+        let id = self
+            .next_calcellation_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        CalcellationId(id)
+    }
+
+    fn create_cancellable_task<F, Fut>(
+        &self,
+        make_fut: F,
+    ) -> (CalcellationId, CancellableTicket, Fut)
+    where
+        F: FnOnce(CalcellationId) -> Fut,
+    {
+        let calcellation_id = self.get_next_calcellation_id();
+        let ticket = CancellableTicket::new();
+        // Store the cancel flag
+        self.cancellable_tickets
+            .write()
+            .unwrap()
+            .insert(calcellation_id, ticket.clone());
+
+        let future = make_fut(calcellation_id);
+        (calcellation_id, ticket, future)
+    }
 }
+
+/// A unique id for a task.
+///
+/// Currently it's only generated for cancelable task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CalcellationId(u64);
 
 /// Task system api
 ///
-/// Run async task on the task system.
+/// Run async task on the task system. Because the task system will be used by ui,
+/// so the api provide a cancelable friendly spawn function. The closure passed to the function
+/// take a `TaskId` as parameter, which can be used to cancel the task cooperatively, you will need to
+/// explictly allow cancellation in your async function if you want systems outside your code can cancel it.
 #[declare_api((0,1,0), shared::TaskSystemApi)]
 pub trait TaskSystemApi: Api {
     /// Spawn a task on the current thread, and return a handle to it.
     ///
     /// The task will be executed on the current thread, and the handle will be returned immediately.
     /// `bubble_tasks` is a per-core runtime library, so the task will be executed on the current core.
-    fn spawn(&self, fut: async_ffi::LocalFfiFuture<()>) -> bubble_tasks::runtime::JoinHandle<()>;
+    ///
+    /// ## TODO
+    ///
+    /// Add opaque type to the return type of the future, which may be a struct or an enum.
+    ///
+    /// ## NOTE
+    ///
+    /// You can drop the future returned by this function, the task will be cancelled.
+    fn spawn(&self, fut: async_ffi::LocalFfiFuture<()>) -> async_ffi::LocalFfiFuture<()>;
+
+    fn spawn_cancelable(
+        &self,
+        make_fut: Box<dyn FnOnce(CalcellationId) -> async_ffi::LocalFfiFuture<()> + Send + 'static>,
+    ) -> (CalcellationId, async_ffi::LocalFfiFuture<()>);
+
+    /// Spawn a blocking task, and return a future to wait for the task to finish.
+    ///
+    /// ## NOTE
+    ///
+    /// If you drop the future returned by this function, the task will be cancelled.
+    /// But typically the func you passed to this function is a cpu-bound task, so the task will be executed to the end once it started.
+    fn spawn_blocking(
+        &self,
+        func: Box<dyn FnOnce() -> () + Send + Sync + 'static>,
+    ) -> async_ffi::FfiFuture<()>;
+
+    /// Spawn a task in the background, you don't need to wait for the task to finish,
+    /// it will run in the background.
+    fn spawn_detached(&self, fut: async_ffi::LocalFfiFuture<()>);
+
+    fn spawn_detached_cancelable(
+        &self,
+        make_fut: Box<dyn FnOnce(CalcellationId) -> async_ffi::LocalFfiFuture<()> + Send + 'static>,
+    ) -> CalcellationId;
+
     /// Dispatch a task to the task system, and return a receiver to it.
     ///
     /// ## Note
     ///
-    /// The [`oneshot::Receiver`] returned by this function will be notified when the task is finished. If you don't care about
     /// whether the task is finished or not, just ignore the [`oneshot::Receiver`]. It doesn't matter whether the [`oneshot::Receiver`] is dropped or not,
     /// the task will be executed to the end anyway.
     ///
@@ -335,11 +439,24 @@ pub trait TaskSystemApi: Api {
         affinity_hint: Option<bubble_tasks::AffinityHint>,
         fut: async_ffi::FfiFuture<()>,
     ) -> Result<oneshot::Receiver<()>, ()>;
+
+    fn dispatch_cancelable(
+        &self,
+        affinity_hint: Option<bubble_tasks::AffinityHint>,
+        make_fut: Box<dyn FnOnce(CalcellationId) -> async_ffi::FfiFuture<()> + Send + 'static>,
+    ) -> Result<(CalcellationId, oneshot::Receiver<()>), ()>;
+
     fn dispatch_blocking(
         &self,
         affinity_hint: Option<bubble_tasks::AffinityHint>,
         func: Box<dyn FnOnce() -> () + Send + 'static>,
     ) -> Result<oneshot::Receiver<()>, ()>;
+
+    /// Explicitly set a shared internal state to allow the task to be cancelled.
+    fn allow_cancel(&self, task_id: CalcellationId) -> bool;
+
+    fn cancel(&self, task_id: CalcellationId);
+
     /// Shutdown the task system.
     ///
     /// Use a temp unsafe implementation to check atomic counter
@@ -358,8 +475,21 @@ pub trait TaskSystemApi: Api {
 }
 
 impl TaskSystemApi for TaskSystem {
-    fn spawn(&self, fut: async_ffi::LocalFfiFuture<()>) -> bubble_tasks::runtime::JoinHandle<()> {
-        bubble_tasks::runtime::spawn(fut)
+    fn spawn(&self, fut: async_ffi::LocalFfiFuture<()>) -> async_ffi::LocalFfiFuture<()> {
+        futures_util::FutureExt::map(bubble_tasks::runtime::spawn(fut), |r| r.unwrap())
+            .into_local_ffi()
+    }
+
+    fn spawn_blocking(
+        &self,
+        func: Box<dyn FnOnce() -> () + Send + Sync + 'static>,
+    ) -> async_ffi::FfiFuture<()> {
+        futures_util::FutureExt::map(bubble_tasks::runtime::spawn_blocking(func), |r| r.unwrap())
+            .into_ffi()
+    }
+
+    fn spawn_detached(&self, fut: async_ffi::LocalFfiFuture<()>) {
+        bubble_tasks::runtime::spawn(fut).detach();
     }
 
     fn dispatch(
@@ -376,9 +506,9 @@ impl TaskSystemApi for TaskSystem {
                 .load()
                 .unwrap()
                 .read()
-                .unwrap()
+                .expect("Can't get the read lock on performance dispatcher")
                 .as_ref()
-                .unwrap()
+                .expect("Performance dispatcher has been shutdown or not initialized")
                 .dispatch(|| fut)
                 .unwrap();
             Ok(result)
@@ -390,9 +520,9 @@ impl TaskSystemApi for TaskSystem {
                 .load()
                 .unwrap()
                 .read()
-                .unwrap()
+                .expect("Can't get the read lock on efficiency dispatcher")
                 .as_ref()
-                .unwrap()
+                .expect("Efficiency dispatcher has been shutdown or not initialized")
                 .dispatch(|| fut)
                 .unwrap();
             Ok(result)
@@ -415,7 +545,7 @@ impl TaskSystemApi for TaskSystem {
                 .read()
                 .unwrap()
                 .as_ref()
-                .unwrap()
+                .expect("Performance dispatcher has been shutdown or not initialized")
                 .dispatch_blocking(func)
                 .unwrap();
             Ok(result)
@@ -429,7 +559,7 @@ impl TaskSystemApi for TaskSystem {
                 .read()
                 .unwrap()
                 .as_ref()
-                .unwrap()
+                .expect("Efficiency dispatcher has been shutdown or not initialized")
                 .dispatch_blocking(func)
                 .unwrap();
             Ok(result)
@@ -437,24 +567,57 @@ impl TaskSystemApi for TaskSystem {
     }
 
     fn shutdown(&self) {
-        let mut dispatcher = self.performance_dispatcher.load();
+        // Shutdown performance dispatcher
+        let mut p_dispatcher = self.performance_dispatcher.load();
         let null_arc = bubble_core::sync::Arc::new(std::sync::RwLock::new(None));
 
+        // Exchange performance dispatcher with None
         loop {
-            let dispatcher_ptr = dispatcher.as_ref().map_or(std::ptr::null(), AsPtr::as_ptr);
+            let dispatcher_ptr = p_dispatcher
+                .as_ref()
+                .map_or(std::ptr::null(), AsPtr::as_ptr);
             match self
                 .performance_dispatcher
                 .compare_exchange(dispatcher_ptr, Some(&null_arc))
             {
                 Ok(()) => break,
-                Err(before) => dispatcher = before,
+                Err(before) => p_dispatcher = before,
             }
         }
 
-        if let Some(dispatcher) = dispatcher {
-            println!("in shutdown");
+        // Shutdown efficiency dispatcher if it exists
+        let mut e_dispatcher = self.efficiency_dispatcher.as_ref().map(|d| d.load());
+        if let Some(ref mut e_dispatcher) = e_dispatcher {
+            loop {
+                let dispatcher_ptr = e_dispatcher
+                    .as_ref()
+                    .map_or(std::ptr::null(), AsPtr::as_ptr);
+                match self
+                    .efficiency_dispatcher
+                    .as_ref()
+                    .unwrap()
+                    .compare_exchange(dispatcher_ptr, Some(&null_arc))
+                {
+                    Ok(()) => break,
+                    Err(before) => *e_dispatcher = before,
+                }
+            }
+        }
+
+        // Create runtime for cleanup
+        let runtime = bubble_tasks::runtime::Runtime::new().unwrap();
+
+        // Join performance dispatcher
+        if let Some(dispatcher) = p_dispatcher {
+            println!("shutting down performance dispatcher");
             let x = dispatcher.write().unwrap().take().unwrap();
-            let runtime = bubble_tasks::runtime::Runtime::new().unwrap();
+            let _ = runtime.block_on(async move { x.join().await });
+        }
+
+        // Join efficiency dispatcher
+        if let Some(dispatcher) = e_dispatcher.flatten() {
+            println!("shutting down efficiency dispatcher");
+            let x = dispatcher.write().unwrap().take().unwrap();
             let _ = runtime.block_on(async move { x.join().await });
         }
     }
@@ -564,5 +727,68 @@ impl TaskSystemApi for TaskSystem {
     /// Get the number of worker threads in the task system dispatcher.
     fn num_threads(&self) -> usize {
         self.num_threads
+    }
+
+    fn spawn_cancelable(
+        &self,
+        make_fut: Box<dyn FnOnce(CalcellationId) -> async_ffi::LocalFfiFuture<()> + Send + 'static>,
+    ) -> (CalcellationId, async_ffi::LocalFfiFuture<()>) {
+        let (task_id, ticket, mut fut) = self.create_cancellable_task(make_fut);
+
+        let wrapped_fut = async move {
+            futures_util::future::poll_fn(|cx| {
+                if ticket.allow_cancel() && ticket.is_canceled() {
+                    return std::task::Poll::Ready(());
+                }
+                futures_util::FutureExt::poll_unpin(&mut fut, cx)
+            })
+            .await
+        };
+
+        (task_id, wrapped_fut.into_local_ffi())
+    }
+
+    fn spawn_detached_cancelable(
+        &self,
+        make_fut: Box<dyn FnOnce(CalcellationId) -> async_ffi::LocalFfiFuture<()> + Send + 'static>,
+    ) -> CalcellationId {
+        let (ticket, fut) = self.spawn_cancelable(make_fut);
+        self.spawn_detached(fut);
+        ticket
+    }
+
+    fn dispatch_cancelable(
+        &self,
+        affinity_hint: Option<bubble_tasks::AffinityHint>,
+        make_fut: Box<dyn FnOnce(CalcellationId) -> async_ffi::FfiFuture<()> + Send + 'static>,
+    ) -> Result<(CalcellationId, oneshot::Receiver<()>), ()> {
+        let (calcellation_id, ticket, mut future) = self.create_cancellable_task(make_fut);
+        let wrapped_fut = async move {
+            futures_util::future::poll_fn(|cx| {
+                if ticket.allow_cancel() && ticket.is_canceled() {
+                    return std::task::Poll::Ready(());
+                }
+                futures_util::FutureExt::poll_unpin(&mut future, cx)
+            })
+            .await
+        };
+
+        let result = self
+            .dispatch(affinity_hint, wrapped_fut.into_ffi())
+            .unwrap();
+        Ok((calcellation_id, result))
+    }
+
+    #[doc = " Explicitly set a shared internal state to allow the task to be cancelled."]
+    fn allow_cancel(&self, task_id: CalcellationId) -> bool {
+        let ticket = self.cancellable_tickets.read().unwrap();
+        let ticket = ticket.get(&task_id).unwrap();
+        ticket.allow_cancel()
+    }
+
+    fn cancel(&self, task_id: CalcellationId) {
+        let ticket = self.cancellable_tickets.read().unwrap();
+        let ticket = ticket.get(&task_id).unwrap();
+        ticket.cancel();
     }
 }

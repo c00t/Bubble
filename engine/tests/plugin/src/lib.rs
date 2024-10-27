@@ -151,7 +151,7 @@ async fn plugin_task(s: String) -> String {
     }
     .into_local_ffi();
 
-    let x = task_system_api.spawn(x).detach();
+    let x = task_system_api.spawn_detached(x);
 
     let task_system_global_api: ApiHandle<_> = (&task_system_api).into();
     println!(
