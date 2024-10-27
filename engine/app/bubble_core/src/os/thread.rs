@@ -16,4 +16,9 @@ impl SysThreadId {
     pub fn current() -> Self {
         SYSTHREAD_ID.with(|id| *id.get_or_init(|| SysThreadId(gettid::gettid())))
     }
+
+    /// Get the uncached thread id
+    pub fn current_uncached() -> Self {
+        SysThreadId(gettid::gettid())
+    }
 }
