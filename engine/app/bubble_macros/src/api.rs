@@ -75,13 +75,25 @@ pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
         let register_api_fn_name = format_ident!("register_{}", snake_case(&api_trait_last_path.to_string()));
         let doc_comment = format!("Register one {} instance into the API registry", api_trait_last_path);
         let dyn_type_ident = dyn_ident(&last_segment.ident);
+        let local_api_handle = format_ident!("{}Handle", api_trait_last_path);
         quote! {
             #[doc = #doc_comment]
-            pub fn #register_api_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>) -> ApiHandle<dyn #api_trait_last_path> {
+            pub fn #register_api_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>) -> ApiHandle<#dyn_type_ident> {
                 api_registry_api
                     .get()
                     .expect("Failed to get API registry api")
                     .local_set::<#dyn_type_ident>(#struct_name::builder().build().into())
+            }
+
+            pub struct #local_api_handle<'local> {
+                api: LocalApiHandle<'local, #dyn_type_ident>
+            }
+
+            // implement From<LocalApiHandle<'local, #dyn_type_ident>> for #local_api_handle<'local>
+            impl<'local> From<LocalApiHandle<'local, #dyn_type_ident>> for #local_api_handle<'local> {
+                fn from(api: LocalApiHandle<'local, #dyn_type_ident>) -> Self {
+                    Self { api }
+                }
             }
         }
     });
