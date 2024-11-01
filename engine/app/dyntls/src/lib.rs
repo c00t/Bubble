@@ -6,13 +6,6 @@ use std::{
     marker,
 };
 
-#[allow(unused_imports)]
-use std::compile_error;
-
-/// Compiler error is both plugin and host feature are enabled
-#[cfg(all(feature = "plugin", feature = "host", not(debug_assertions)))]
-compile_error!("Both plugin and host features are enabled");
-
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct AccessError;
 
@@ -38,7 +31,6 @@ impl<T: 'static> LocalKey<T> {
     /// Acquires a reference to the value in this TLS key.
     ///
     /// If neither `host` nor `plugin` features are enabled, this will panic.
-    #[cfg(any(feature = "host", feature = "plugin"))]
     pub fn with<F, R>(&'static self, f: F) -> R
     where
         F: FnOnce(&T) -> R,
@@ -49,33 +41,12 @@ impl<T: 'static> LocalKey<T> {
         )
     }
 
-    /// Acquires a reference to the value in this TLS key.
-    ///
-    /// If neither `host` nor `plugin` features are enabled, this will panic.
-    #[cfg(not(any(feature = "host", feature = "plugin")))]
-    pub fn with<F, R>(&'static self, _f: F) -> R
-    where
-        F: FnOnce(&T) -> R,
-    {
-        panic!("dyntls built without 'host' or 'plugin' enabled")
-    }
-
-    #[cfg(any(feature = "host", feature = "plugin"))]
-    #[inline]
     pub fn try_with<F, R>(&'static self, f: F) -> Result<R, AccessError>
     where
         F: FnOnce(&T) -> R,
     {
         let thread_local = unsafe { (self.read)().as_ref().ok_or(AccessError)? };
         Ok(f(thread_local))
-    }
-
-    #[cfg(not(any(feature = "host", feature = "plugin")))]
-    pub fn try_with<F, R>(&'static self, _f: F) -> Result<R, AccessError>
-    where
-        F: FnOnce(&T) -> R,
-    {
-        panic!("dyntls built without 'host' or 'plugin' enabled")
     }
 }
 
@@ -469,79 +440,15 @@ macro_rules! __lazy_static_inner {
     };
 }
 
-#[cfg(feature = "host")]
-mod host {
-    use abi_stable::std_types::{RBox, RStr};
-    use std::cell::RefCell;
-    use std::collections::BTreeMap as Map;
-    use std::mem::MaybeUninit;
-    use std::sync::{Mutex, Once};
-
-    std::thread_local! {
-        static PLUGIN_TLS: RefCell<Map<RStr<'static>, RBox<()>>> = RefCell::new(Default::default());
-    }
-
-    static PLUGIN_STATIC_ONCE: Once = Once::new();
-    static mut PLUGIN_STATIC: MaybeUninit<Mutex<Map<RStr<'static>, RBox<()>>>> =
-        MaybeUninit::uninit();
-
-    fn static_map() -> std::sync::MutexGuard<'static, Map<RStr<'static>, RBox<()>>> {
-        PLUGIN_STATIC_ONCE.call_once(|| unsafe {
-            PLUGIN_STATIC.write(Default::default());
-        });
-        unsafe { PLUGIN_STATIC.assume_init_mut() }.lock().unwrap()
-    }
-
-    pub unsafe extern "C" fn tls(
-        id: &RStr<'static>,
-        init: extern "C" fn() -> RBox<()>,
-    ) -> *const () {
-        PLUGIN_TLS.with(|m| {
-            let mut m = m.borrow_mut();
-            if !m.contains_key(id) {
-                m.insert(id.clone(), init());
-            }
-            // We leak the reference from PLUGIN_TLS as well as the reference out of the RefCell,
-            // however this will be safe because:
-            // 1. the reference will be used shortly within the thread's runtime (not sending to
-            //    another thread) due to the `with` implementation, and
-            // 2. the RefCell guard is protecting access/changes to the map, however we _only_ ever
-            //    add to the map if a key does not exist (so this box won't disappear on us).
-            m.get(id).unwrap().as_ref() as *const ()
-        })
-    }
-
-    pub unsafe extern "C" fn statics(
-        id: &RStr<'static>,
-        init: extern "C" fn() -> RBox<()>,
-    ) -> *const () {
-        let mut m = static_map();
-        if !m.contains_key(id) {
-            m.insert(id.clone(), init());
-        }
-        // We leak the reference from PLUGIN_STATIC as well as the reference out of the Mutex,
-        // however this will be safe because:
-        // 1. the reference will have static lifetime once initially created, and
-        // 2. the Mutex guard is protecting access/changes to the map, however we _only_ ever
-        //    add to the map if a key does not exist (so this box won't disappear on us).
-        m.get(id).unwrap().as_ref() as *const ()
-    }
-
-    pub fn reset() {
-        PLUGIN_TLS.with(|m| m.borrow_mut().clear());
-        static_map().clear();
-    }
-}
-
-type AccessFunction =
+pub type AccessFunction =
     unsafe extern "C" fn(&RStr<'static>, extern "C" fn() -> RBox<()>) -> *const ();
 
 /// The context to be installed in plugins.
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct Context {
-    tls: AccessFunction,
-    statics: AccessFunction,
+    pub tls: AccessFunction,
+    pub statics: AccessFunction,
 }
 
 impl Context {
@@ -556,37 +463,8 @@ impl Context {
     }
 }
 
-#[cfg(feature = "host")]
-impl Context {
-    /// Get the context.
-    ///
-    /// Separate instances of `Context` will always be identical.
-    pub fn get() -> Self {
-        Context {
-            tls: host::tls,
-            statics: host::statics,
-        }
-    }
-
-    /// Reset the thread-local storage for the current thread.
-    ///
-    /// This destructs all values and returns the state to a point as if no values have yet been
-    /// accessed on the current thread.
-    pub fn reset() {
-        host::reset();
-    }
-}
-
-#[cfg(feature = "host")]
-static mut HOST_TLS: Option<AccessFunction> = Some(host::tls);
-
-#[cfg(not(feature = "host"))]
 static mut HOST_TLS: Option<AccessFunction> = None;
 
-#[cfg(feature = "host")]
-static mut HOST_STATICS: Option<AccessFunction> = Some(host::statics);
-
-#[cfg(not(feature = "host"))]
 static mut HOST_STATICS: Option<AccessFunction> = None;
 
 #[doc(hidden)]
@@ -738,88 +616,23 @@ impl<T> ScopedKey<T> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::cell::Cell;
-    use std::sync::mpsc::{channel, Sender};
-    use std::thread;
+/// A thread id represent system-wide thread id
+#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
+pub struct SysThreadId(u64);
 
-    scoped_thread_local!(static FOO: u32);
+crate::thread_local! {
+    /// A thread local [`ThreadId`] that can be used to identify the current thread
+    static SYSTHREAD_ID: SysThreadId = SysThreadId(gettid::gettid());
+}
 
-    #[test]
-    fn smoke() {
-        scoped_thread_local!(static BAR: u32);
-
-        assert!(!BAR.is_set());
-        BAR.set(&1, || {
-            assert!(BAR.is_set());
-            BAR.with(|slot| {
-                assert_eq!(*slot, 1);
-            });
-        });
-        assert!(!BAR.is_set());
+impl SysThreadId {
+    /// Get the current thread id
+    pub fn current() -> Self {
+        SYSTHREAD_ID.with(|id| *id)
     }
 
-    #[test]
-    fn cell_allowed() {
-        scoped_thread_local!(static BAR: Cell<u32>);
-
-        BAR.set(&Cell::new(1), || {
-            BAR.with(|slot| {
-                assert_eq!(slot.get(), 1);
-            });
-        });
-    }
-
-    #[test]
-    fn scope_item_allowed() {
-        assert!(!FOO.is_set());
-        FOO.set(&1, || {
-            assert!(FOO.is_set());
-            FOO.with(|slot| {
-                assert_eq!(*slot, 1);
-            });
-        });
-        assert!(!FOO.is_set());
-    }
-
-    #[test]
-    fn panic_resets() {
-        struct Check(Sender<u32>);
-        impl Drop for Check {
-            fn drop(&mut self) {
-                FOO.with(|r| {
-                    self.0.send(*r).unwrap();
-                })
-            }
-        }
-
-        let (tx, rx) = channel();
-        let t = thread::spawn(|| {
-            FOO.set(&1, || {
-                let _r = Check(tx);
-
-                FOO.set(&2, || panic!());
-            });
-        });
-
-        assert_eq!(rx.recv().unwrap(), 1);
-        assert!(t.join().is_err());
-    }
-
-    #[test]
-    fn attrs_allowed() {
-        scoped_thread_local!(
-            /// Docs
-            static BAZ: u32
-        );
-
-        scoped_thread_local!(
-            #[allow(non_upper_case_globals)]
-            static quux: u32
-        );
-
-        let _ = BAZ;
-        let _ = quux;
+    /// Get the uncached thread id
+    pub fn current_uncached() -> Self {
+        SysThreadId(gettid::gettid())
     }
 }

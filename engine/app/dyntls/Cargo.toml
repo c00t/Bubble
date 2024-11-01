@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 abi_stable = "0.11.3"
+gettid = "0.1.3"
 
 [features]
 default = []
