@@ -27,9 +27,10 @@ use rustc_hash::FxHashMap;
 use thiserror::Error;
 
 use super::Api;
-use crate::sync::{Arc, AsPtr, AtomicArc, Guard, RefCount};
+use crate::sync::{Arc, AsPtr, AtomicArc, Guard, RefCount, Weak};
 
 type HandleInternal<T> = Arc<AtomicArc<Box<T>>>;
+type WeakHandleInternal<T> = Weak<AtomicArc<Box<T>>>;
 
 /// A plugin(or future) global type-aware handle to an API.
 ///
@@ -809,5 +810,66 @@ impl<'local> LocalApiHandle<'local, dyn ApiRegistryApi> {
         &self,
     ) -> Vec<Version> {
         self.deref().available_api_versions(T::NAME)
+    }
+}
+
+/// A weak plugin(or future) global type-aware handle to an API.
+///
+/// It's used to be stored inside api struct, avoid circular reference.
+pub struct WeakApiHandle<T: 'static + ?Sized + Api> {
+    inner: WeakAnyApiHandle,
+    _phantom_type: marker::PhantomData<WeakHandleInternal<T>>,
+}
+
+impl<T: 'static + ?Sized + Api> WeakApiHandle<T> {
+    /// Attempts to upgrade the weak handle to an ApiHandle.
+    /// Returns None if the original ApiHandle has been dropped.
+    pub fn upgrade(&self) -> Option<ApiHandle<T>> {
+        self.inner.upgrade().map(|handle| ApiHandle {
+            inner: handle,
+            _phantom_type: marker::PhantomData,
+        })
+    }
+}
+
+impl<T: 'static + ?Sized + Api> Clone for WeakApiHandle<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            _phantom_type: marker::PhantomData,
+        }
+    }
+}
+
+/// Opaque weak api handle
+pub struct WeakAnyApiHandle(WeakHandleInternal<dyn TraitcastableAny + Sync + Send>);
+
+impl WeakAnyApiHandle {
+    /// Attempts to upgrade to an AnyApiHandle
+    pub fn upgrade(&self) -> Option<AnyApiHandle> {
+        self.0.upgrade().map(AnyApiHandle)
+    }
+}
+
+impl Clone for WeakAnyApiHandle {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T: 'static + ?Sized + Api> ApiHandle<T> {
+    /// Creates a new weak handle to this API
+    pub fn downgrade(&self) -> WeakApiHandle<T> {
+        WeakApiHandle {
+            inner: self.inner.downgrade(),
+            _phantom_type: marker::PhantomData,
+        }
+    }
+}
+
+impl AnyApiHandle {
+    /// Creates a new weak handle to this API
+    pub fn downgrade(&self) -> WeakAnyApiHandle {
+        WeakAnyApiHandle(Arc::downgrade(&self.0))
     }
 }
