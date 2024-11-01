@@ -1,12 +1,14 @@
 use std::cell::OnceCell;
 
-pub use dyntls::{lazy_static, scoped_thread_local, thread_local, Context, LocalKey, ScopedKey};
+pub use dyntls;
+
+pub use dyntls_host as dyntls_context;
 
 /// A thread id represent system-wide thread id
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub struct SysThreadId(u64);
 
-crate::thread_local! {
+dyntls::thread_local! {
     /// A thread local [`ThreadId`] that can be used to identify the current thread
     static SYSTHREAD_ID: OnceCell<SysThreadId> = OnceCell::new();
 }
