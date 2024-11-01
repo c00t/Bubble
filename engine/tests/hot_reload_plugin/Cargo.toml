@@ -1,0 +1,10 @@
+[package]
+name = "hot-reload-plugin"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bubble-core = {path = "../../app/bubble_core", default-features = false, features = ["plugin"]}

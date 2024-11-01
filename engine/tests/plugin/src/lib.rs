@@ -10,7 +10,7 @@ use std::{
 use async_ffi::{async_ffi, FutureExt};
 use bubble_core::{
     api::prelude::*,
-    os::{thread::Context, SysThreadId},
+    os::{thread::dyntls::Context, SysThreadId},
     sync::{Arc, AtomicArc, RefCount},
 };
 use bubble_tasks::{

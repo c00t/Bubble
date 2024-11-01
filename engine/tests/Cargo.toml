@@ -1,5 +1,5 @@
 [workspace]
-members = ["application", "plugin", "shared", "plugin2"]
+members = ["application", "plugin", "shared", "plugin2", "hot_reload_plugin"]
 resolver = "2"
 
 [workspace.dependencies]

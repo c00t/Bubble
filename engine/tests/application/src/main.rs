@@ -8,7 +8,7 @@ use bubble_core::api::prelude::*;
 use bubble_core::sync::RefCount;
 use bubble_core::{
     api::api_registry_api::get_api_registry_api,
-    os::{thread::Context, SysThreadId},
+    os::{thread::dyntls::Context, SysThreadId},
     sync::AtomicArc,
 };
 use bubble_tasks::runtime::Runtime;
@@ -550,7 +550,10 @@ fn main() {
         .get_or_init(|| std::sync::Arc::new(unsafe { Container::load(&dll_name2[0]) }.unwrap()));
 
     // get context, and prepare apis
-    let context = Context::get();
+    let context = bubble_core::os::thread::dyntls_context::get();
+    unsafe {
+        context.initialize();
+    }
 
     let api_registry_api = get_api_registry_api(); // api: strong count 1,2
 
@@ -564,11 +567,17 @@ fn main() {
     // 2. set api
     println!("...");
     let task_system_api = shared::register_task_system_api(&api_registry_api); // task: strong count 4
+    let plugin_api = bubble_core::api::plugin_api::register_plugin_api(&api_registry_api);
     println!("{:?}", task_system_api);
     println!(
         "num_threads: {}",
         task_system_api.get().unwrap().num_threads()
     );
+    let q = plugin_api
+        .get()
+        .unwrap()
+        .load("./target/debug/hot_reload_plugin.dll", true);
+    println!("hot reload plugin is none? {:?}", q.is_none());
 
     println!("...");
     let _ = MAIN.get_or_init(|| {

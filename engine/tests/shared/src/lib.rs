@@ -779,7 +779,6 @@ impl TaskSystemApi for TaskSystem {
         Ok((calcellation_id, result))
     }
 
-    #[doc = " Explicitly set a shared internal state to allow the task to be cancelled."]
     fn allow_cancel(&self, task_id: CalcellationId) -> bool {
         let ticket = self.cancellable_tickets.read().unwrap();
         let ticket = ticket.get(&task_id).unwrap();
