@@ -19,3 +19,9 @@
 [submodule "third-party/vendor/tracing"]
 	path = third-party/vendor/tracing
 	url = https://github.com/c00t/tracing.git
+[submodule "third-party/vendor/circ"]
+	path = third-party/vendor/circ
+	url = https://github.com/c00t/circ.git
+[submodule "third-party/vendor/crossbeam"]
+	path = third-party/vendor/crossbeam
+	url = https://github.com/c00t/crossbeam.git
