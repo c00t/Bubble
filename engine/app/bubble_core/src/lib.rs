@@ -8,5 +8,6 @@ pub mod dll;
 pub mod os;
 pub mod plugin;
 pub mod sync;
+pub use tracing;
 
 pub use os::thread::dyntls::{lazy_static, scoped_thread_local, thread_local};

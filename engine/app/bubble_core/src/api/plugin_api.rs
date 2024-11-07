@@ -1,3 +1,4 @@
+use core::fmt;
 use std::sync::{atomic::AtomicU64, Mutex, OnceLock};
 
 use bon::{bon, builder};
@@ -23,7 +24,7 @@ pub mod constants {
                 RUSTC_SEMVER,
                 &RUSTC_HASH[..9],
                 BUILD_OPT_LEVEL,
-                TARGET_TRIPLE
+                TARGET_TRIPLE.replace('_', "-")
             )
         } else {
             format!(
@@ -31,7 +32,7 @@ pub mod constants {
                 RUSTC_SEMVER,
                 &RUSTC_HASH[..9],
                 BUILD_OPT_LEVEL,
-                TARGET_TRIPLE
+                TARGET_TRIPLE.replace('_', "-")
             )
         }
     }
@@ -65,10 +66,15 @@ pub struct PluginExportFns {
 
 /// A plugin initialization context
 #[repr(C)]
-#[derive(Copy, Clone)]
 pub struct PluginContext {
     /// The dyntls context
     dyntls_context: dyntls::Context,
+}
+
+impl fmt::Debug for PluginContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PluginContext")
+    }
 }
 
 impl PluginContext {

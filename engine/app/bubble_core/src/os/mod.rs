@@ -1,3 +1,3 @@
 pub mod thread;
 
-pub use thread::SysThreadId;
+pub use thread::dyntls::SysThreadId;
