@@ -18,7 +18,6 @@ anyhow = "1.0.90"
 thiserror = "1.0.64"
 bon = "2.3.0"
 tracing = { path = "../../third-party/vendor/tracing/tracing"}
-tracy-client = { path = "../../third-party/vendor/rust_tracy_client/tracy-client", optional = true }
 
 [dev-dependencies]
 dyntls-host = { path = "../dyntls_host"}
