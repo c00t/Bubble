@@ -6,6 +6,7 @@ use std::{any::TypeId, sync::OnceLock, thread};
 use async_ffi::FutureExt;
 use bubble_core::api::prelude::*;
 use bubble_core::sync::RefCount;
+use bubble_core::tracing;
 use bubble_core::{
     api::api_registry_api::get_api_registry_api,
     os::{thread::dyntls::Context, SysThreadId},
@@ -696,13 +697,29 @@ fn main() {
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App::default();
-    let tick_thread = thread::spawn(move || {
-        let task_system = task_system_api.clone();
-        let task_api = task_system.get().unwrap();
-        while unsafe { task_api.tick(tick().into_local_ffi()) } {
-            println!("...");
-        }
-    });
+    let tick_thread = thread::Builder::new()
+        .name("Tick Thread".to_string())
+        .spawn(move || {
+            let task_system = task_system_api.clone();
+            let task_api = task_system.get().unwrap();
+            while unsafe {
+                task_api.tick(
+                    async {
+                        let b = tick().await;
+                        tracing::event!(
+                            tracing::Level::INFO,
+                            message = "end tick",
+                            tracy.frame_mark = true
+                        );
+                        b
+                    }
+                    .into_local_ffi(),
+                )
+            } {
+                println!("...");
+            }
+        })
+        .unwrap();
     let _ = event_loop.run_app(&mut app);
 
     let _ = tick_thread.join();
