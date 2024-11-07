@@ -10,6 +10,7 @@ use bubble_core::{
     api::api_registry_api::get_api_registry_api,
     os::{thread::dyntls::Context, SysThreadId},
     sync::AtomicArc,
+    tracing::info,
 };
 use bubble_tasks::runtime::Runtime;
 use dlopen2::wrapper::{Container, WrapperApi};
@@ -573,6 +574,8 @@ fn main() {
         "num_threads: {}",
         task_system_api.get().unwrap().num_threads()
     );
+    bubble_log::LogSubscriberBuilder::default().set_global();
+    info!(">>>>info log");
     let q = plugin_api
         .get()
         .unwrap()

@@ -12,6 +12,7 @@ use bubble_core::{
     api::prelude::*,
     os::{thread::dyntls::Context, SysThreadId},
     sync::{Arc, AtomicArc, RefCount},
+    tracing::{self, info, instrument, warn},
 };
 use bubble_tasks::{
     io::{AsyncReadAt, AsyncReadAtExt},
@@ -95,6 +96,7 @@ pub unsafe extern "C" fn unload_plugin() {
 }
 
 #[async_ffi(?Send)]
+#[instrument]
 #[no_mangle]
 async fn plugin_task(s: String) -> String {
     let plugin = PLUGIN.get().unwrap().load().unwrap();
@@ -173,6 +175,7 @@ async fn plugin_task(s: String) -> String {
                         .dispatch(
                             None,
                             async move {
+                                info!("plugin_thread(loop{})", i);
                                 // let filename = format!("test0.txt");
                                 // let file = bubble_tasks::fs::File::open(filename).await.unwrap();
                                 // let (read, buffer) = file

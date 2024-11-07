@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-bubble-core = {path = "../../app/bubble_core", default-features = false, features = ["plugin"]}
+bubble-core = {path = "../../app/bubble_core", default-features = false}
 shared = {workspace = true}
 bubble-tasks = {workspace = true}
 async-ffi = { path = "../../third-party/vendor/async-ffi", features = ["macros"] }
