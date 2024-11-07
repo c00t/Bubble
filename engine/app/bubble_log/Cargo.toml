@@ -4,3 +4,18 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+bubble-core = { path = "../bubble_core" }
+tracing-error = { path = "../../third-party/vendor/tracing/tracing-error", optional = true }
+tracing-subscriber = { path = "../../third-party/vendor/tracing/tracing-subscriber", features = ["registry", "env-filter"] }
+tracing-tracy = { path = "../../third-party/vendor/rust_tracy_client/tracing-tracy", optional = true }
+tracy-client = { path = "../../third-party/vendor/rust_tracy_client/tracy-client", optional = true }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+tracing-oslog = "0.2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_log-sys = "0.3.0"
+
+[features]
+tracy = ["tracing-tracy", "tracy-client"]
+panic-hook = ["tracing-error"]
