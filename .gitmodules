@@ -25,3 +25,12 @@
 [submodule "third-party/vendor/crossbeam"]
 	path = third-party/vendor/crossbeam
 	url = https://github.com/c00t/crossbeam.git
+[submodule "third-party/vendor/sharded-slab"]
+	path = third-party/vendor/sharded-slab
+	url = https://github.com/c00t/sharded-slab.git
+[submodule "third-party/vendor/thread_local-rs"]
+	path = third-party/vendor/thread_local-rs
+	url = https://github.com/c00t/thread_local-rs.git
+[submodule "third-party/vendor/rust_tracy_client"]
+	path = third-party/vendor/rust_tracy_client
+	url = https://github.com/c00t/rust_tracy_client.git
