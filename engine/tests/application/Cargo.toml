@@ -17,3 +17,4 @@ rand = "=0.9.0-alpha.2"
 rand_distr = "=0.5.0-alpha.2"
 # tracing-subscriber = { path = "../../third-party/vendor/tracing/tracing-subscriber", features = ["registry", "env-filter"] }
 bubble-log = { path = "../../app/bubble_log", features = ["panic-hook", "tracy"]}
+hot_reload_plugin_types = {path = "../hot_reload_plugin_types"}

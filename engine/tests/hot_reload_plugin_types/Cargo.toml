@@ -1,0 +1,7 @@
+[package]
+name = "hot_reload_plugin_types"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bubble-core = {path = "../../app/bubble_core", default-features = false}

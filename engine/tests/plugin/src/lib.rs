@@ -175,7 +175,7 @@ async fn plugin_task(s: String) -> String {
                         .dispatch(
                             None,
                             async move {
-                                info!("plugin_thread(loop{})", i);
+                                // info!("plugin_thread(loop{})", i);
                                 // let filename = format!("test0.txt");
                                 // let file = bubble_tasks::fs::File::open(filename).await.unwrap();
                                 // let (read, buffer) = file

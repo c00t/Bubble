@@ -530,7 +530,7 @@ pub async fn tick() -> bool {
     let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
     long_running_async_task(counter).await;
 
-    if counter == 200 {
+    if counter == 2000 {
         println!("in tick: {}, return false", counter);
         false
     } else {
@@ -557,6 +557,8 @@ fn main() {
         context.initialize();
     }
 
+    bubble_log::LogSubscriberBuilder::default().set_global();
+
     let api_registry_api = get_api_registry_api(); // api: strong count 1,2
 
     // TEST0 set after load
@@ -570,18 +572,24 @@ fn main() {
     println!("...");
     let task_system_api = shared::register_task_system_api(&api_registry_api); // task: strong count 4
     let plugin_api = bubble_core::api::plugin_api::register_plugin_api(&api_registry_api);
+    let hot_reload_test_api = api_registry_api
+        .get()
+        .unwrap()
+        .local_find::<hot_reload_plugin_types::DynHotReloadTestApi>();
     println!("{:?}", task_system_api);
     println!(
         "num_threads: {}",
         task_system_api.get().unwrap().num_threads()
     );
-    bubble_log::LogSubscriberBuilder::default().set_global();
+
     info!(">>>>info log");
     let q = plugin_api
         .get()
         .unwrap()
         .load("./target/debug/hot_reload_plugin.dll", true);
     println!("hot reload plugin is none? {:?}", q.is_none());
+    // plugin loaded, so it's safe to call get_test_string
+    info!(test_string = hot_reload_test_api.get().unwrap().get_test_string());
 
     println!("...");
     let _ = MAIN.get_or_init(|| {
@@ -646,24 +654,6 @@ fn main() {
         println!("<<<");
     }
 
-    MAIN.get()
-        .unwrap()
-        .load()
-        .unwrap()
-        .task_system_api
-        .get()
-        .unwrap()
-        .shutdown();
-    MAIN.get()
-        .unwrap()
-        .load()
-        .unwrap()
-        .api_registry_api
-        .get()
-        .unwrap()
-        .shutdown();
-    MAIN.get().unwrap().store::<bubble_core::sync::Arc<_>>(None); // api: strong count 2, task: strong count 3
-
     // Unload dll library
     // TODO: Arc? it will unload when it drop, but if you're using Arc in static to ref it
 
@@ -703,8 +693,17 @@ fn main() {
             let task_system = task_system_api.clone();
             let task_api = task_system.get().unwrap();
             while unsafe {
+                let plugin_api = plugin_api.clone();
+                let hot_reload_test_api = hot_reload_test_api.clone();
                 task_api.tick(
-                    async {
+                    async move {
+                        let plugin_api = plugin_api.get().unwrap();
+                        let reload = plugin_api.check_hot_reload_tick();
+                        // println!("hot reload tick: {}", reload);
+                        if reload {
+                            let hot_reload_test_api = hot_reload_test_api.get().unwrap();
+                            info!(test_string = hot_reload_test_api.get_test_string());
+                        }
                         let b = tick().await;
                         tracing::event!(
                             tracing::Level::INFO,
@@ -723,6 +722,24 @@ fn main() {
     let _ = event_loop.run_app(&mut app);
 
     let _ = tick_thread.join();
+
+    MAIN.get()
+        .unwrap()
+        .load()
+        .unwrap()
+        .task_system_api
+        .get()
+        .unwrap()
+        .shutdown();
+    MAIN.get()
+        .unwrap()
+        .load()
+        .unwrap()
+        .api_registry_api
+        .get()
+        .unwrap()
+        .shutdown();
+    MAIN.get().unwrap().store::<bubble_core::sync::Arc<_>>(None);
 }
 
 use winit::application::ApplicationHandler;

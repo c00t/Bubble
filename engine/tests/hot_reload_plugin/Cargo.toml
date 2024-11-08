@@ -8,3 +8,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 bubble-core = {path = "../../app/bubble_core", default-features = false}
+const-random = "0.1.17"
+hot_reload_plugin_types = {path = "../hot_reload_plugin_types"}
