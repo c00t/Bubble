@@ -1,3 +1,4 @@
+#![allow(static_mut_refs)]
 use abi_stable::std_types::{RBox, RStr};
 use dyntls::Context;
 use std::cell::RefCell;

@@ -5,6 +5,7 @@ use super::prelude::*;
 #[define_interface(TestInterface)]
 #[derive(Debug)]
 pub struct TestInterfaceStruct {
+    #[allow(dead_code)]
     val: i32,
 }
 

@@ -1,17 +1,16 @@
 use core::fmt;
 use std::sync::atomic::AtomicBool;
-use std::sync::RwLock;
 use std::sync::{atomic::AtomicU64, Mutex, OnceLock};
 
-use bon::{bon, builder};
+use crate::bon::bon;
 use dlopen2::wrapper::{Container, WrapperApi};
 use semver::BuildMetadata;
 use sharded_slab::Slab;
-use tracing::field::debug;
 
 use crate::os;
 
 use super::prelude::*;
+#[allow(unused_imports)]
 use crate::tracing::{debug, error, info, warn};
 
 pub mod constants {
@@ -48,6 +47,12 @@ pub mod constants {
 pub struct PluginInfo {
     pub identifier: String,
     pub version: Version,
+}
+
+impl fmt::Display for PluginInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}::{}", self.identifier, self.version)
+    }
 }
 
 impl PluginInfo {
@@ -106,6 +111,8 @@ impl PluginContext {
 pub struct Plugin {
     /// The plugin path
     pub path: String,
+    /// Load path
+    pub load_path: String,
     /// The plugin name
     pub name: String,
     /// The container of the plugin's dll
@@ -114,6 +121,31 @@ pub struct Plugin {
     pub hot_reloadable: bool,
     /// The last mofified time of the plugin dll
     pub last_modified: u64,
+}
+
+impl fmt::Display for Plugin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // name, path, hot_reloadable, last_modified
+        f.debug_struct("Plugin")
+            .field("name", &self.name)
+            .field("path", &self.path)
+            .field("load_path", &self.load_path)
+            .field("hot_reloadable", &self.hot_reloadable)
+            .field("last_modified", &self.last_modified)
+            .finish()
+    }
+}
+
+impl fmt::Debug for Plugin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Plugin")
+            .field("name", &self.name)
+            .field("path", &self.path)
+            .field("load_path", &self.load_path)
+            .field("hot_reloadable", &self.hot_reloadable)
+            .field("last_modified", &self.last_modified)
+            .finish()
+    }
 }
 
 /// The metadata of the plugin inside the plugin registry
@@ -125,10 +157,25 @@ pub struct Plugin {
 #[derive(Debug)]
 pub struct PluginMeta {
     pub path: String,
+    pub load_path: String,
     pub name: String,
     pub plugin_info: PluginInfo,
     pub hot_reloadable: bool,
     pub last_modified: u64,
+}
+
+impl fmt::Display for PluginMeta {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let _ = f
+            .debug_struct("PluginBasic")
+            .field("path", &self.path)
+            .field("load_path", &self.load_path)
+            .field("name", &self.name)
+            .field("hot_reloadable", &self.hot_reloadable)
+            .field("last_modified", &self.last_modified)
+            .finish();
+        f.write_fmt(format_args!(", PluginInfo: {}", self.plugin_info))
+    }
 }
 
 fn get_plugin_name_from_path(path: &str) -> String {
@@ -181,12 +228,7 @@ impl Plugin {
                 }
             }
         };
-        info!(
-            "[Plugin] identity path: {:?}, physical path: {:?}, plugin info: {:?}",
-            path,
-            load_path,
-            container.plugin_info()
-        );
+
         // Get the file name for the plugin name
         let name = get_plugin_name_from_path(path);
 
@@ -197,13 +239,18 @@ impl Plugin {
             .unwrap_or_default()
             .as_secs();
 
-        Ok(Plugin {
+        let plugin = Plugin {
             path: path.to_string(),
+            load_path,
             name,
             container,
             hot_reloadable,
             last_modified,
-        })
+        };
+        let meta = plugin.metadata();
+        info!("[Plugin] {}", meta);
+
+        Ok(plugin)
     }
 
     fn load_plugin(
@@ -232,6 +279,7 @@ impl Plugin {
     fn metadata(&self) -> PluginMeta {
         PluginMeta {
             path: self.path.clone(),
+            load_path: self.load_path.clone(),
             name: self.name.clone(),
             plugin_info: self.container.plugin_info(),
             hot_reloadable: self.hot_reloadable,

@@ -1,3 +1,4 @@
+#![allow(static_mut_refs)]
 pub use abi_stable as macro_support;
 use abi_stable::std_types::{RBox, RStr};
 use core::fmt;

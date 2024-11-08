@@ -59,7 +59,9 @@ pub mod mimalloc {
 
 #[cfg(feature = "system")]
 pub mod system {
-    use std::alloc::{Global, GlobalAlloc, Layout};
+    use std::alloc::Layout;
+    #[cfg(feature = "tracy_memory")]
+    use std::alloc::{Global, GlobalAlloc};
 
     #[cfg(feature = "tracy_memory")]
     use tracy_client::ProfiledAllocator;

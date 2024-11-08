@@ -13,14 +13,13 @@
 
 use core::fmt;
 use std::{
-    any::{type_name, type_name_of_val},
-    fmt::Display,
     marker,
     ops::Deref,
     sync::{OnceLock, RwLock},
 };
 
 use super::prelude::*;
+#[allow(unused_imports)]
 use crate::tracing::{debug, error, info, trace, warn};
 use bon::bon;
 use bubble_macros::{declare_api, define_api};
@@ -591,7 +590,7 @@ impl ApiRegistry {
     ) -> AnyInterfaceHandle {
         let id = VersionedName::new(name, version);
         let mut w_lock = self.inner_interfaces.write().unwrap();
-        let raw_entry = w_lock
+        let _raw_entry = w_lock
             .entry(id)
             .and_modify(|entry| {
                 entry.push(InterfaceEntry {
@@ -672,13 +671,11 @@ impl ApiRegistry {
 
     pub fn ref_counts(&self) {
         // loop through the hash map and print the ref counts
-        let x = 1;
-        let _ = x + x;
     }
 
     pub fn interface_count(&self, name: &'static str, version: Version) -> Option<usize> {
         let id = VersionedName::new(name, version);
-        let mut r_lock = self.inner_interfaces.read().unwrap();
+        let r_lock = self.inner_interfaces.read().unwrap();
 
         r_lock.get(&id).map(|v| v.len())
     }

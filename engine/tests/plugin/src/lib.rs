@@ -29,7 +29,7 @@ struct Plugin {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn test_dynamic_tls() {
+pub fn test_dynamic_tls() {
     shared::TEST_VAR.with(|x| {
         let mut guard = x.lock().unwrap();
         println!("plugin: {}", *guard);
@@ -39,7 +39,7 @@ pub unsafe extern "C" fn test_dynamic_tls() {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn test_typeid(ids: (TypeId, TypeId, TypeId)) {
+pub fn test_typeid(ids: (TypeId, TypeId, TypeId)) {
     println!("--StringAlias--");
     println!(
         "plugin's std::String         [{:?}]",
@@ -63,11 +63,10 @@ pub unsafe extern "C" fn test_typeid(ids: (TypeId, TypeId, TypeId)) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn load_plugin(
-    context: &Context,
-    api_registry_api: ApiHandle<dyn ApiRegistryApi>,
-) {
-    context.initialize();
+pub fn load_plugin(context: &Context, api_registry_api: ApiHandle<dyn ApiRegistryApi>) {
+    unsafe {
+        context.initialize();
+    }
     let api_guard = api_registry_api.get().unwrap();
 
     let task_system_api = api_guard.local_find::<dyn TaskSystemApi>();
@@ -90,7 +89,7 @@ pub unsafe extern "C" fn load_plugin(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn unload_plugin() {
+pub fn unload_plugin() {
     // clear plugin data
     PLUGIN.get().unwrap().store::<Arc<_>>(None);
 }
