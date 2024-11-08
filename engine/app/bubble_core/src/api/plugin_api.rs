@@ -1,13 +1,18 @@
 use core::fmt;
+use std::sync::atomic::AtomicBool;
+use std::sync::RwLock;
 use std::sync::{atomic::AtomicU64, Mutex, OnceLock};
 
 use bon::{bon, builder};
 use dlopen2::wrapper::{Container, WrapperApi};
 use semver::BuildMetadata;
+use sharded_slab::Slab;
+use tracing::field::debug;
 
 use crate::os;
 
 use super::prelude::*;
+use crate::tracing::{debug, error, info, warn};
 
 pub mod constants {
     pub const TARGET_TRIPLE: &str = env!("VERGEN_CARGO_TARGET_TRIPLE");
@@ -38,9 +43,10 @@ pub mod constants {
     }
 }
 
+/// Information about the plugin internally, include its identifier, and its version
 #[derive(Debug, Clone)]
 pub struct PluginInfo {
-    pub name: String,
+    pub identifier: String,
     pub version: Version,
 }
 
@@ -50,7 +56,7 @@ impl PluginInfo {
         let mut version = version;
         version.build = build_meta;
         Self {
-            name: name.to_string(),
+            identifier: name.to_string(),
             version,
         }
     }
@@ -59,8 +65,13 @@ impl PluginInfo {
 /// The plugin export functions
 #[derive(WrapperApi)]
 pub struct PluginExportFns {
-    load_plugin: fn(context: &PluginContext, api_registry: ApiHandle<dyn ApiRegistryApi>),
-    unload_plugin: fn(context: &PluginContext, api_registry: ApiHandle<dyn ApiRegistryApi>),
+    /// The load plugin function
+    load_plugin:
+        fn(context: &PluginContext, api_registry: ApiHandle<dyn ApiRegistryApi>, is_reload: bool),
+    /// The unload plugin function
+    unload_plugin:
+        fn(context: &PluginContext, api_registry: ApiHandle<dyn ApiRegistryApi>, is_reload: bool),
+    /// The plugin info function
     plugin_info: fn() -> PluginInfo,
 }
 
@@ -105,6 +116,30 @@ pub struct Plugin {
     pub last_modified: u64,
 }
 
+/// The metadata of the plugin inside the plugin registry
+///
+/// Compare to [`PluginInfo`], it contains more external information about the plugin,
+/// such as the identity path(may different from the physical path when hot reloading),
+/// the plugin name, hot reloadable, last modified time, etc.
+///
+#[derive(Debug)]
+pub struct PluginMeta {
+    pub path: String,
+    pub name: String,
+    pub plugin_info: PluginInfo,
+    pub hot_reloadable: bool,
+    pub last_modified: u64,
+}
+
+fn get_plugin_name_from_path(path: &str) -> String {
+    let path_buf = std::path::PathBuf::from(path);
+    path_buf
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string()
+}
+
 impl Plugin {
     fn load(path: &str, hot_reloadable: bool, is_reloading: bool) -> Result<Self, std::io::Error> {
         // Copy the DLL if hot reloading is enabled
@@ -146,14 +181,14 @@ impl Plugin {
                 }
             }
         };
-
+        info!(
+            "[Plugin] identity path: {:?}, physical path: {:?}, plugin info: {:?}",
+            path,
+            load_path,
+            container.plugin_info()
+        );
         // Get the file name for the plugin name
-        let path_buf = std::path::PathBuf::from(path);
-        let name = path_buf
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
+        let name = get_plugin_name_from_path(path);
 
         // Get last modified time
         let last_modified = std::fs::metadata(path)?
@@ -171,17 +206,43 @@ impl Plugin {
         })
     }
 
-    fn load_plugin(&self, context: &PluginContext, api_registry: ApiHandle<dyn ApiRegistryApi>) {
-        (self.container.load_plugin)(context, api_registry);
+    fn load_plugin(
+        &self,
+        context: &PluginContext,
+        api_registry: ApiHandle<dyn ApiRegistryApi>,
+        is_reload: bool,
+    ) {
+        info!("Loading plugin: {:?}, is_reload: {}", self.name, is_reload);
+        (self.container.load_plugin)(context, api_registry, is_reload);
     }
 
-    fn unload_plugin(&self, context: &PluginContext, api_registry: ApiHandle<dyn ApiRegistryApi>) {
-        (self.container.unload_plugin)(context, api_registry);
+    fn unload_plugin(
+        &self,
+        context: &PluginContext,
+        api_registry: ApiHandle<dyn ApiRegistryApi>,
+        is_reload: bool,
+    ) {
+        info!(
+            "Unloading plugin: {:?}, is_reload: {}",
+            self.name, is_reload
+        );
+        (self.container.unload_plugin)(context, api_registry, is_reload);
+    }
+
+    fn metadata(&self) -> PluginMeta {
+        PluginMeta {
+            path: self.path.clone(),
+            name: self.name.clone(),
+            plugin_info: self.container.plugin_info(),
+            hot_reloadable: self.hot_reloadable,
+            last_modified: self.last_modified,
+        }
     }
 }
 
 /// A plugin handle returned or accepted by the plugin api
-pub struct PluginHandle(u64);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PluginHandle(usize);
 
 /// The plugin api
 ///
@@ -189,6 +250,8 @@ pub struct PluginHandle(u64);
 #[declare_api((0,1,0), bubble_core::api::plugin_api::PluginApi)]
 pub trait PluginApi: Api {
     /// Load the plugin dll at the specified path, and return the plugin handle that can be used to unload or reload the plugin.
+    ///
+    /// It's the initial load function, so it will call your [`load_plugin`] function of the plugin with `is_reload` set to false.
     fn load(&self, path: &str, hot_reloadable: bool) -> Option<PluginHandle>;
     /// Get the version tick of the plugin registry,
     /// which will be increased when the plugin registry is modified.
@@ -198,12 +261,36 @@ pub trait PluginApi: Api {
     ///
     /// false positive may happen if the plugin load function failed.
     fn version_tick(&self) -> u64;
+    /// Unload the plugin which loaded by the [`PluginApi::load`] function.
+    ///
+    /// It's the initial unload function, so it will call your [`unload_plugin`] function of the plugin with `is_reload` set to false.
+    fn unload(&self, handle: PluginHandle);
+    /// Handles hot reloading of plugins.
+    ///
+    /// It's the initial reload function, so it will call your [`unload_plugin`] and [`load_plugin`] functions of the plugin with `is_reload` set to true.
+    fn reload(&self, handle: PluginHandle);
+
+    /// Set the path of specific plugin after loaded, when reload, it will be loaded from the new path
+    ///
+    /// It's mainly used by plugin assets, which
+    fn set_path(&self, handle: PluginHandle, new_path: String);
+
+    /// Checks loaded plugins for any changes on disk, reload plugins that changed.
+    fn check_hot_reload_tick(&self) -> bool;
+
+    fn info(&self, handle: PluginHandle) -> Option<PluginMeta>;
 }
 
 #[define_api(PluginApi)]
 struct PluginsRegistry {
     /// The plugins' storage
-    plugins: Mutex<Vec<Plugin>>,
+    plugins_storage: Slab<Mutex<Plugin>>,
+    /// The plugins' handle storage
+    plugins_handles: Mutex<Vec<PluginHandle>>,
+    /// Unloaded plugins' storage
+    ///
+    /// We reserve the unloaded plugins to avoid the plugin dll being unloaded while the program is using it(typically the static memory).
+    unloaded_plugins: Mutex<Vec<Plugin>>,
     /// The version tick of the plugin registry,
     /// it will be increased when the plugin registry is modified.
     version_tick: AtomicU64,
@@ -228,7 +315,9 @@ impl PluginsRegistry {
 
     pub fn empty() -> Self {
         Self {
-            plugins: Mutex::new(Vec::new()),
+            plugins_storage: Slab::new(),
+            plugins_handles: Mutex::new(Vec::new()),
+            unloaded_plugins: Mutex::new(Vec::new()),
             version_tick: AtomicU64::new(0),
             context: PluginContext::new(),
             api_registry: super::api_registry_api::get_api_registry_api(),
@@ -330,6 +419,26 @@ fn copy_dynamic_library(path: &str, is_reloading: bool) -> Result<String, std::i
     Ok(tmp_path)
 }
 
+use std::fs::OpenOptions;
+use std::io;
+
+fn can_load_plugin(path: &str) -> io::Result<bool> {
+    // Check if file exists
+    if !std::path::Path::new(path).exists() {
+        return Ok(false);
+    }
+
+    // Try to open file with write permissions to check if it's not locked
+    match OpenOptions::new().append(true).open(path) {
+        Ok(_) => Ok(true),
+        Err(e) => match e.kind() {
+            io::ErrorKind::PermissionDenied => Ok(false),
+            io::ErrorKind::WouldBlock => Ok(false), // File is locked
+            _ => Err(e),                            // Propagate unexpected errors
+        },
+    }
+}
+
 impl PluginApi for PluginsRegistry {
     fn load(&self, path: &str, hot_reloadable: bool) -> Option<PluginHandle> {
         // increase the version tick
@@ -342,18 +451,244 @@ impl PluginApi for PluginsRegistry {
 
         let plugin = Plugin::load(path, hot_reloadable, false).ok()?;
 
-        plugin.load_plugin(&self.context, self.api_registry.clone());
-
-        let info = plugin.container.plugin_info();
-        println!("{:?}", info);
+        plugin.load_plugin(&self.context, self.api_registry.clone(), false);
 
         // add the plugin to the plugins registry
-        self.plugins.lock().unwrap().push(plugin);
-        Some(PluginHandle(self.plugins.lock().unwrap().len() as u64 - 1))
+        let handle = self
+            .plugins_storage
+            .insert(Mutex::new(plugin))
+            .and_then(|key| {
+                // increase the version tick
+                self.increase_version_tick();
+                // add the handle to the plugins handles
+                let mut handles_lock = self.plugins_handles.lock().unwrap();
+                handles_lock.push(PluginHandle(key));
+                Some(PluginHandle(key))
+            });
+        handle
     }
 
     fn version_tick(&self) -> u64 {
         self.version_tick()
+    }
+
+    fn unload(&self, handle: PluginHandle) {
+        let slab = &self.plugins_storage;
+        // we remove it from slab, but we don't drop it, because program will ref to static memory of the plugin dll
+        let plugin = slab.take(handle.0 as usize);
+        if plugin.is_none() {
+            return;
+        }
+        let plugin = plugin.unwrap().into_inner().unwrap();
+        plugin.unload_plugin(&self.context, self.api_registry.clone(), false);
+        // remove the handle from the plugins handles
+        let mut handles_lock = self.plugins_handles.lock().unwrap();
+        handles_lock.retain(|&h| h != handle);
+        // add the plugin to the unloaded plugins
+        let mut unload_lock = self.unloaded_plugins.lock().unwrap();
+        unload_lock.push(plugin);
+        // increase the version tick
+        self.increase_version_tick();
+    }
+
+    fn reload(&self, handle: PluginHandle) {
+        let plugin = self.plugins_storage.get(handle.0 as usize);
+        if plugin.is_none() {
+            return;
+        }
+        let plugin = plugin.unwrap();
+        let mut plugin = plugin.lock().unwrap();
+        match can_load_plugin(&plugin.path) {
+            Ok(true) => {
+                info!("Reloading plugin: {:?}", plugin.path);
+                let new_plugin = Plugin::load(&plugin.path, plugin.hot_reloadable, true).unwrap();
+                // unload the old plugin
+                plugin.unload_plugin(&self.context, self.api_registry.clone(), true);
+                // load new plugin
+                new_plugin.load_plugin(&self.context, self.api_registry.clone(), true);
+                // replace the old plugin with the new one
+                let old_plugin = std::mem::replace(&mut *plugin, new_plugin);
+                // add the old plugin to the unloaded plugins
+                let mut unload_lock = self.unloaded_plugins.lock().unwrap();
+                unload_lock.push(old_plugin);
+            }
+            Ok(false) => {
+                info!("Failed to reload plugin: {:?}", plugin.path);
+            }
+            Err(e) => {
+                error!("Failed to check if plugin is loaded: {:?}", e);
+            }
+        }
+        self.increase_version_tick();
+    }
+
+    fn set_path(&self, handle: PluginHandle, new_path: String) {
+        let plugin = self.plugins_storage.get(handle.0 as usize);
+        if let Some(plugin_mutex) = plugin {
+            let mut plugin = plugin_mutex.lock().expect("Failed to lock plugin");
+            // Extract the new name from the path
+            let new_name = get_plugin_name_from_path(&new_path);
+            // Update both path and name
+            plugin.path = new_path;
+            plugin.name = new_name;
+            // Increase version tick to notify of changes
+            self.increase_version_tick();
+        };
+    }
+
+    fn check_hot_reload_tick(&self) -> bool {
+        // Get a read lock on the plugins storage
+        let plugins = &self.plugins_storage;
+        let handles = self.plugins_handles.lock().expect("Failed to lock handles");
+
+        // Return early if no plugins
+        if handles.is_empty() {
+            return false;
+        }
+
+        // Use a static atomic to track which plugin to check next
+        static CURRENT_INDEX: AtomicU64 = AtomicU64::new(0);
+
+        // Get and increment the index atomically, wrapping around to 0
+        let current = CURRENT_INDEX.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let index = (current as usize) % handles.len();
+
+        // Check if the current plugin is modified
+        let current_handle = handles[index];
+        let is_modified = if let Some(plugin_lock) = plugins.get(current_handle.0) {
+            let plugin = plugin_lock.lock().expect("Failed to lock plugin");
+            if plugin.hot_reloadable {
+                // Get current modification time
+                if let Ok(metadata) = std::fs::metadata(&plugin.path) {
+                    if let Ok(modified) = metadata.modified() {
+                        if let Ok(modified_secs) = modified
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                        {
+                            modified_secs != plugin.last_modified
+                        } else {
+                            // debug!("1");
+                            false
+                        }
+                    } else {
+                        // debug!("2");
+                        false
+                    }
+                } else {
+                    // debug!("3");
+                    false
+                }
+            } else {
+                // debug!("4");
+                false
+            }
+        } else {
+            // debug!("5");
+            false
+        };
+        debug!(
+            "check hot reload tick: {}, is_modified: {}",
+            index, is_modified
+        );
+        static WHOLE_RELOAD_TICK: AtomicBool = AtomicBool::new(false);
+        // If any plugin was modified, check and reload all modified plugins
+        if is_modified && !WHOLE_RELOAD_TICK.load(std::sync::atomic::Ordering::Acquire) {
+            // set the whole reload tick to true
+            WHOLE_RELOAD_TICK.store(true, std::sync::atomic::Ordering::Release);
+            info!("Reloading all modified plugins");
+            for handle in handles.iter() {
+                if let Some(plugin_lock) = plugins.get(handle.0) {
+                    let plugin = plugin_lock.lock().expect("Failed to lock plugin");
+                    if !plugin.hot_reloadable {
+                        continue;
+                    }
+
+                    // Check if this plugin was modified
+                    if let Ok(metadata) = std::fs::metadata(&plugin.path) {
+                        if let Ok(modified) = metadata.modified() {
+                            if let Ok(modified_secs) = modified
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                            {
+                                if modified_secs != plugin.last_modified {
+                                    // Drop the lock before calling reload
+                                    drop(plugin);
+                                    drop(plugin_lock);
+                                    self.reload(*handle);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // set the whole reload tick to false
+            WHOLE_RELOAD_TICK.store(false, std::sync::atomic::Ordering::Release);
+        }
+
+        is_modified
+    }
+
+    fn info(&self, handle: PluginHandle) -> Option<PluginMeta> {
+        let plugin = self.plugins_storage.get(handle.0 as usize);
+        if let Some(plugin_mutex) = plugin {
+            let plugin = plugin_mutex.lock().expect("Failed to lock plugin");
+            Some(plugin.metadata())
+        } else {
+            None
+        }
+    }
+}
+
+/// Get the plugins path in the specified directory
+pub fn get_plugins_in_directory(directory: &str) -> Vec<String> {
+    let mut plugins = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(directory) {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                // Only process files
+                if !file_type.is_file() {
+                    continue;
+                }
+
+                if let Some(file_name) = entry.file_name().to_str() {
+                    // Skip hot reload copies
+                    if file_name.contains(".hot_reload.") {
+                        continue;
+                    }
+
+                    if file_name.ends_with(std::env::consts::DLL_EXTENSION) {
+                        if let Some(path) = entry.path().to_str() {
+                            plugins.push(path.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    plugins
+}
+
+/// Get the plugin named `plugin_name` under the subdirectory `sub_dir` besides the file `file`
+pub fn get_plugin_besides_file(file: &str, plugin_name: &str, sub_dir: &str) -> Option<String> {
+    let ext = std::env::consts::DLL_EXTENSION;
+    let file_path = std::path::Path::new(file);
+
+    // Get parent directory of the file
+    let parent_dir = file_path.parent()?;
+
+    // Construct path to subdirectory
+    let plugin_dir = parent_dir.join(sub_dir);
+
+    // Construct expected plugin path
+    let plugin_path = plugin_dir.join(format!("{}.{}", plugin_name, ext));
+
+    // Convert to string and return if exists
+    if plugin_path.exists() {
+        plugin_path.to_str().map(String::from)
+    } else {
+        None
     }
 }
 
@@ -362,6 +697,92 @@ mod tests {
     use super::*;
     use std::fs::{self, File};
     use tempfile::TempDir;
+
+    #[test]
+    fn test_get_plugin_besides_file() {
+        // Create a temporary directory structure
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        // Create main file
+        let main_file_path = temp_path.join("main.exe");
+        File::create(&main_file_path).unwrap();
+
+        // Create plugins directory
+        let plugins_dir = temp_path.join("plugins");
+        fs::create_dir(&plugins_dir).unwrap();
+
+        // Create plugin file
+        let ext = std::env::consts::DLL_EXTENSION;
+        let plugin_path = plugins_dir.join(format!("test_plugin.{}", ext));
+        File::create(&plugin_path).unwrap();
+
+        // Test successful case
+        let result =
+            get_plugin_besides_file(main_file_path.to_str().unwrap(), "test_plugin", "plugins");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), plugin_path.to_str().unwrap().to_string());
+
+        // Test non-existent plugin
+        let result = get_plugin_besides_file(
+            main_file_path.to_str().unwrap(),
+            "non_existent_plugin",
+            "plugins",
+        );
+        assert!(result.is_none());
+
+        // Test non-existent directory
+        let result = get_plugin_besides_file(
+            main_file_path.to_str().unwrap(),
+            "test_plugin",
+            "non_existent_dir",
+        );
+        assert!(result.is_none());
+
+        // Test invalid main file path
+        let result = get_plugin_besides_file("non/existent/path", "test_plugin", "plugins");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_plugins_in_directory() {
+        // Create a temporary directory for testing
+        let temp_dir = TempDir::new().unwrap();
+        let temp_path = temp_dir.path();
+
+        // Create test files with platform-specific extension
+        let ext = std::env::consts::DLL_EXTENSION;
+        let files = [
+            format!("plugin1.{ext}"),
+            format!("plugin2.{ext}"),
+            format!("plugin1.hot_reload.123.{ext}"), // Should be ignored
+            format!("plugin2.hot_reload.{ext}"),     // Should be ignored
+            "not_a_plugin.txt".to_string(),          // Should be ignored
+            format!("another.hot_reload.456.{ext}"), // Should be ignored
+        ];
+
+        // Create all test files
+        for file_name in &files {
+            let file_path = temp_path.join(file_name);
+            File::create(&file_path).unwrap();
+        }
+
+        // Create a subdirectory (should be ignored)
+        std::fs::create_dir(temp_path.join("subdir")).unwrap();
+
+        // Get plugins
+        let plugins = get_plugins_in_directory(temp_path.to_str().unwrap());
+
+        // Verify results
+        assert_eq!(plugins.len(), 2);
+        assert!(plugins
+            .iter()
+            .any(|p| p.ends_with(&format!("plugin1.{ext}"))));
+        assert!(plugins
+            .iter()
+            .any(|p| p.ends_with(&format!("plugin2.{ext}"))));
+        assert!(plugins.iter().all(|p| !p.contains(".hot_reload.")));
+    }
 
     #[test]
     fn test_clean_up_hot_reload_copies() {

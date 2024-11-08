@@ -18,6 +18,7 @@ anyhow = "1.0.90"
 thiserror = "1.0.64"
 bon = "2.3.0"
 tracing = { path = "../../third-party/vendor/tracing/tracing"}
+sharded-slab = { path = "../../third-party/vendor/sharded-slab"}
 
 [dev-dependencies]
 dyntls-host = { path = "../dyntls_host"}

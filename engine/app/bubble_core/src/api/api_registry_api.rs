@@ -11,6 +11,7 @@
 //! [`LocalApiHandle`] reduces the overhead of ref count increment and decrement in functions, while avoid freeing memory during the function execution.
 //!
 
+use core::fmt;
 use std::{
     any::{type_name, type_name_of_val},
     fmt::Display,
@@ -20,7 +21,7 @@ use std::{
 };
 
 use super::prelude::*;
-
+use crate::tracing::{debug, error, info, trace, warn};
 use bon::bon;
 use bubble_macros::{declare_api, define_api};
 use rustc_hash::FxHashMap;
@@ -321,7 +322,7 @@ where
 ///
 /// ## Example
 ///
-/// ```no_run
+/// ```no_compile
 /// use bubble_core::api::api_registy_api::{ApiRegistryApi, AnyApiHandle, ApiHandle};
 ///
 /// let task_system_api: ApiHandle<dyn TaskSystemApi> = api_registry_api.find(task_system_api::NAME, task_system_api::VERSION).downcast();
@@ -508,11 +509,29 @@ struct ApiRegistry {
     /// Store api which is registered by plugins.
     ///
     /// 1 implementation per api
-    pub inner_apis: RwLock<FxHashMap<(&'static str, Version), ApiEntry>>,
+    pub inner_apis: RwLock<FxHashMap<VersionedName, ApiEntry>>,
     /// Store implementationss which is registered by plugins
     ///
     /// multiple implementations per interface
-    pub inner_interfaces: RwLock<FxHashMap<(&'static str, Version), Vec<InterfaceEntry>>>,
+    pub inner_interfaces: RwLock<FxHashMap<VersionedName, Vec<InterfaceEntry>>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VersionedName {
+    pub name: &'static str,
+    pub version: Version,
+}
+
+impl fmt::Display for VersionedName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}::{}", self.name, self.version)
+    }
+}
+
+impl VersionedName {
+    pub fn new(name: &'static str, version: Version) -> Self {
+        Self { name, version }
+    }
 }
 
 pub fn get_api_registry_api() -> ApiHandle<dyn ApiRegistryApi> {
@@ -545,22 +564,22 @@ impl ApiRegistry {
     }
 
     pub fn set(&self, name: &'static str, version: Version, api: AnyApiHandle) -> AnyApiHandle {
-        let id = (name, version);
+        let id = VersionedName::new(name, version.clone());
+        info!("Setting Api: {}", id);
+
         let mut w_lock = self.inner_apis.write().unwrap();
+
         // if don't have the api, create a new one inside registry,
         // if specific entry is already exist, update the api using atomic store
         let raw_entry = w_lock
             .entry(id.clone())
             .and_modify(|entry| {
                 // TODO: if we don't use RWLock in ApiRegistry, we should use compare_exchange
-                println!("found {:?} when set", id.clone());
+                info!("Overwriting: {}", id);
                 let arc = &entry.inner.0;
                 arc.store(api.0.load().as_ref());
             })
-            .or_insert({
-                println!("not found {:?} when set", id.clone());
-                ApiEntry { inner: api }
-            });
+            .or_insert(ApiEntry { inner: api });
         raw_entry.inner.clone()
     }
 
@@ -570,7 +589,7 @@ impl ApiRegistry {
         version: Version,
         interface: AnyInterfaceHandle,
     ) -> AnyInterfaceHandle {
-        let id = (name, version);
+        let id = VersionedName::new(name, version);
         let mut w_lock = self.inner_interfaces.write().unwrap();
         let raw_entry = w_lock
             .entry(id)
@@ -585,7 +604,7 @@ impl ApiRegistry {
 
     pub fn remove(&self, name: &'static str, version: Version) -> Option<AnyApiHandle> {
         let mut w_lock = self.inner_apis.write().unwrap();
-        let id = (name, version);
+        let id = VersionedName::new(name, version);
         let entry = w_lock.remove(&id).map(|entry| entry.inner);
         entry
     }
@@ -597,7 +616,7 @@ impl ApiRegistry {
         instance_id: UniqueId,
     ) -> Option<AnyInterfaceHandle> {
         let mut w_lock = self.inner_interfaces.write().unwrap();
-        let id = (name, version);
+        let id = VersionedName::new(name, version);
         let mut result = None;
         w_lock.entry(id).and_modify(|entries| {
             let pos = entries.iter_mut().position(|entry| {
@@ -620,27 +639,28 @@ impl ApiRegistry {
     }
 
     pub fn get(&self, name: &'static str, version: Version) -> AnyApiHandle {
+        let id = VersionedName::new(name, version);
+        info!("Getting Api: {}", id);
         let r_lock = self.inner_apis.read().unwrap();
 
         // Find the best matching version
         let best_match = r_lock
             .keys()
-            .filter(|&(key_name, key_version)| *key_name == name)
-            .max_by(|&(_, a), &(_, b)| a.cmp(b));
+            .filter(|key| key.name == name)
+            .max_by(|a, b| a.version.cmp(&b.version));
 
-        if let Some((_, best_version)) = best_match {
-            let id = (name, best_version.clone());
-            if let Some(raw_entry) = r_lock.get(&id) {
-                println!("found {:?} when get", id);
+        if let Some(best_match) = best_match {
+            if let Some(raw_entry) = r_lock.get(&best_match) {
+                info!("Found {} when get", best_match);
                 return raw_entry.inner.clone();
             }
         }
 
         // If no match found, create a new entry
         drop(r_lock);
-        println!("not found {:?} when get", (name, version.clone()));
+        info!("Not found {} when get", id);
         let mut w_lock = self.inner_apis.write().unwrap();
-        let id = (name, version);
+
         let raw_entry = w_lock.entry(id).or_insert_with(|| {
             let new_arc_to_null = Arc::new(AtomicArc::new(None));
             ApiEntry {
@@ -652,10 +672,12 @@ impl ApiRegistry {
 
     pub fn ref_counts(&self) {
         // loop through the hash map and print the ref counts
+        let x = 1;
+        let _ = x + x;
     }
 
     pub fn interface_count(&self, name: &'static str, version: Version) -> Option<usize> {
-        let id = (name, version);
+        let id = VersionedName::new(name, version);
         let mut r_lock = self.inner_interfaces.read().unwrap();
 
         r_lock.get(&id).map(|v| v.len())
@@ -666,7 +688,7 @@ impl ApiRegistry {
         name: &'static str,
         version: Version,
     ) -> Option<Vec<AnyInterfaceHandle>> {
-        let id = (name, version);
+        let id = VersionedName::new(name, version);
         let r_lock = self.inner_interfaces.read().unwrap();
         r_lock
             .get(&id)
@@ -678,7 +700,7 @@ impl ApiRegistry {
         name: &'static str,
         version: Version,
     ) -> Option<AnyInterfaceHandle> {
-        let id = (name, version);
+        let id = VersionedName::new(name, version);
         let r_lock = self.inner_interfaces.read().unwrap();
         r_lock
             .get(&id)
@@ -690,8 +712,8 @@ impl ApiRegistry {
         let mut versions = Vec::new();
         let r_lock = self.inner_apis.read().unwrap();
         for (k, _) in r_lock.iter() {
-            if k.0 == name {
-                versions.push(k.1.clone());
+            if k.name == name.to_string() {
+                versions.push(k.version.clone());
             }
         }
         versions
