@@ -4,7 +4,7 @@ use super::prelude::*;
 
 #[define_interface(TestInterface)]
 #[derive(Debug)]
-pub struct TestInterfaceStruct1 {
+struct TestInterfaceStruct1 {
     #[allow(dead_code)]
     val: i32,
 }
@@ -20,7 +20,7 @@ impl TestInterfaceStruct1 {
 
 #[define_interface(TestInterface)]
 #[derive(Debug)]
-pub struct TestInterfaceStruct2 {
+struct TestInterfaceStruct2 {
     #[allow(dead_code)]
     val: i32,
 }

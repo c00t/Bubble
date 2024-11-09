@@ -43,9 +43,14 @@ pub mod constants {
 }
 
 /// Information about the plugin internally, include its identifier, and its version
+///
+/// Build details are included in the version's build metadata.
+/// It's format is `{RUSTC_SEMVER}-{RUSTC_HASH[..9]}-{debug|release}.{BUILD_OPT_LEVEL}.{TARGET_TRIPLE.replace('_', "-")}`
 #[derive(Debug, Clone)]
 pub struct PluginInfo {
+    /// The identifier of the plugin, provided by the plugin author.
     pub identifier: String,
+    /// The version of the plugin, including the build metadata.
     pub version: Version,
 }
 
@@ -56,6 +61,9 @@ impl fmt::Display for PluginInfo {
 }
 
 impl PluginInfo {
+    /// Create a new plugin info with the given name and version.
+    ///
+    /// The build metadata will be included by overwriting the version's build metadata you provided.
     pub fn new(name: &str, version: Version) -> Self {
         let build_meta = BuildMetadata::new(&constants::build_meta()).unwrap();
         let mut version = version;
@@ -67,20 +75,34 @@ impl PluginInfo {
     }
 }
 
-/// The plugin export functions
+/// The functions that should be exported by a plugin dll
 #[derive(WrapperApi)]
 pub struct PluginExportFns {
     /// The load plugin function
-    load_plugin:
-        fn(context: &PluginContext, api_registry: ApiHandle<dyn ApiRegistryApi>, is_reload: bool),
+    load_plugin: fn(
+        context: &PluginContext,
+        api_registry: ApiHandle<dyn ApiRegistryApi>,
+        is_reload: bool,
+    ) -> bool,
     /// The unload plugin function
-    unload_plugin:
-        fn(context: &PluginContext, api_registry: ApiHandle<dyn ApiRegistryApi>, is_reload: bool),
+    unload_plugin: fn(
+        context: &PluginContext,
+        api_registry: ApiHandle<dyn ApiRegistryApi>,
+        is_reload: bool,
+    ) -> bool,
     /// The plugin info function
     plugin_info: fn() -> PluginInfo,
 }
 
 /// A plugin initialization context
+///
+/// ## Note
+///
+/// [`PluginContext::new`] should be called in main executable, and pass the context to the plugin's
+/// [`PluginExportFns::load_plugin`] function. It's automatically done when you use [`PluginApi`].
+///
+/// [`PluginContext::load`] should be called first in the plugin's
+/// [`PluginExportFns::load_plugin`] function before using any function inside core lib.
 #[repr(C)]
 pub struct PluginContext {
     /// The dyntls context
@@ -94,16 +116,45 @@ impl fmt::Debug for PluginContext {
 }
 
 impl PluginContext {
+    /// Create a new plugin context
+    ///
+    /// It should be called in main executable.
     pub fn new() -> Self {
         Self {
             dyntls_context: os::thread::dyntls_context::get(),
         }
     }
 
-    pub fn load(&self) {
+    /// Load the plugin context
+    ///
+    /// It should be called first in the plugin's [`PluginExportFns::load_plugin`] function.
+    ///
+    /// ## Note
+    ///
+    /// This function currently:
+    /// - initialize the dyntls context.
+    /// - check the api registry api version compatibility.
+    ///
+    /// It will return an error if the api registry api version is incompatible.
+    ///
+    #[must_use]
+    pub fn load(&self, api_handle: &ApiHandle<dyn ApiRegistryApi>) -> Result<(), ()> {
         unsafe {
             self.dyntls_context.initialize();
         }
+        // check the api registry api version compatibility
+        let api_handle = api_handle.get().unwrap();
+        let actual_version = api_handle.version();
+        // check against the version declared in the crate itself, use semver methods
+        let request_version = crate::api::api_registry_api::api_registry_api_constants::VERSION;
+        if actual_version < request_version {
+            error!(
+                "Plugin load failed, api registry api version mismatch, actual: {}, request: {}",
+                actual_version, request_version
+            );
+            return Err(());
+        }
+        Ok(())
     }
 }
 
@@ -151,16 +202,22 @@ impl fmt::Debug for Plugin {
 /// The metadata of the plugin inside the plugin registry
 ///
 /// Compare to [`PluginInfo`], it contains more external information about the plugin,
-/// such as the identity path(may different from the physical path when hot reloading),
+/// such as the identity path(may different from the physical path([`PluginMeta::load_path`]) when hot reloading),
 /// the plugin name, hot reloadable, last modified time, etc.
 ///
 #[derive(Debug)]
 pub struct PluginMeta {
+    /// The identity path of the plugin
     pub path: String,
+    /// The physical path of the plugin
     pub load_path: String,
+    /// The name of the plugin
     pub name: String,
+    /// The plugin info
     pub plugin_info: PluginInfo,
+    /// The plugin is hot reloadable?
     pub hot_reloadable: bool,
+    /// The last modified time of the plugin dll
     pub last_modified: u64,
 }
 
@@ -188,7 +245,30 @@ fn get_plugin_name_from_path(path: &str) -> String {
 }
 
 impl Plugin {
+    /// Creates a new Plugin instance by loading a dynamic library from the given path.
+    ///
+    /// ## Arguments
+    ///
+    /// * `path` - The path to the plugin dynamic library file
+    /// * `hot_reloadable` - Whether the plugin supports hot reloading. If true, the plugin will be copied to a temporary location.
+    /// * `is_reloading` - Whether this is a reload of an existing plugin (only relevant if hot_reloadable is true)
+    ///
+    /// ## Returns
+    ///
+    /// Returns a Result containing either:
+    /// * Ok(Plugin) - Successfully loaded plugin instance
+    /// * Err(std::io::Error) - Error loading the plugin, such as file not found or invalid library format
+    ///
+    /// ## Notes
+    /// 
+    /// If hot reloading is enabled, the plugin file will be copied to a temporary location before loading.
+    /// This allows the original file to be modified while the plugin is loaded.
+    ///
+    /// If reloading, the plugin file will be copied to another location, with a timestamp suffix.
     fn load(path: &str, hot_reloadable: bool, is_reloading: bool) -> Result<Self, std::io::Error> {
+        // Assert that is_reloading can only be true if hot_reloadable is true
+        debug_assert!(!is_reloading || hot_reloadable, 
+            "Invalid parameter combination: is_reloading can only be true if hot_reloadable is true");
         // Copy the DLL if hot reloading is enabled
         let load_path = if hot_reloadable {
             copy_dynamic_library(path, is_reloading)?
@@ -253,29 +333,29 @@ impl Plugin {
         Ok(plugin)
     }
 
+    /// Call the [`PluginExportFns::load_plugin`] function of the plugin
     fn load_plugin(
         &self,
         context: &PluginContext,
         api_registry: ApiHandle<dyn ApiRegistryApi>,
         is_reload: bool,
-    ) {
-        info!("Loading plugin: {:?}, is_reload: {}", self.name, is_reload);
-        (self.container.load_plugin)(context, api_registry, is_reload);
+    ) -> bool {
+        info!("Loading plugin: {}, is_reload: {}", self.name, is_reload);
+        (self.container.load_plugin)(context, api_registry, is_reload)
     }
 
+    /// Call the [`PluginExportFns::unload_plugin`] function of the plugin
     fn unload_plugin(
         &self,
         context: &PluginContext,
         api_registry: ApiHandle<dyn ApiRegistryApi>,
         is_reload: bool,
-    ) {
-        info!(
-            "Unloading plugin: {:?}, is_reload: {}",
-            self.name, is_reload
-        );
-        (self.container.unload_plugin)(context, api_registry, is_reload);
+    ) -> bool {
+        info!("Unloading plugin: {}, is_reload: {}", self.name, is_reload);
+        (self.container.unload_plugin)(context, api_registry, is_reload)
     }
 
+    /// Get the metadata of the plugin
     fn metadata(&self) -> PluginMeta {
         PluginMeta {
             path: self.path.clone(),
@@ -326,6 +406,7 @@ pub trait PluginApi: Api {
     /// Checks loaded plugins for any changes on disk, reload plugins that changed.
     fn check_hot_reload_tick(&self) -> bool;
 
+    /// Get the metadata of the plugin
     fn info(&self, handle: PluginHandle) -> Option<PluginMeta>;
 }
 
@@ -342,7 +423,9 @@ struct PluginsRegistry {
     /// The version tick of the plugin registry,
     /// it will be increased when the plugin registry is modified.
     version_tick: AtomicU64,
+    /// The plugin context
     context: PluginContext,
+    /// The api registry api handler
     api_registry: ApiHandle<dyn ApiRegistryApi>,
 }
 
@@ -382,6 +465,7 @@ impl PluginsRegistry {
     }
 }
 
+/// Clean up the hot reload copies of the plugin
 fn clean_up_hot_reload_copies(path: &str) {
     // Get the directory and filename from the path
     let path = std::path::Path::new(path);
@@ -470,6 +554,21 @@ fn copy_dynamic_library(path: &str, is_reloading: bool) -> Result<String, std::i
 use std::fs::OpenOptions;
 use std::io;
 
+/// Check if a plugin can be loaded by attempting to open it with write permissions.
+///
+/// This function checks two things:
+/// - If the plugin file exists at the given path
+/// - If the file can be opened with write permissions (i.e., not locked by another process)
+///
+/// # Arguments
+///
+/// * `path` - The path to the plugin file to check
+///
+/// # Returns
+///
+/// * `Ok(true)` - The plugin exists and can be loaded
+/// * `Ok(false)` - The plugin either doesn't exist or is locked/inaccessible
+/// * `Err(e)` - An unexpected IO error occurred while checking
 fn can_load_plugin(path: &str) -> io::Result<bool> {
     // Check if file exists
     if !std::path::Path::new(path).exists() {
@@ -499,7 +598,11 @@ impl PluginApi for PluginsRegistry {
 
         let plugin = Plugin::load(path, hot_reloadable, false).ok()?;
 
-        plugin.load_plugin(&self.context, self.api_registry.clone(), false);
+        let loaded = plugin.load_plugin(&self.context, self.api_registry.clone(), false);
+        if !loaded {
+            error!("Failed to load plugin: {}", plugin);
+            return None;
+        }
 
         // add the plugin to the plugins registry
         let handle = self
@@ -528,7 +631,10 @@ impl PluginApi for PluginsRegistry {
             return;
         }
         let plugin = plugin.unwrap().into_inner().unwrap();
-        plugin.unload_plugin(&self.context, self.api_registry.clone(), false);
+        let unloaded = plugin.unload_plugin(&self.context, self.api_registry.clone(), false);
+        if !unloaded {
+            error!("Failed to unload plugin: {}", plugin);
+        }
         // remove the handle from the plugins handles
         let mut handles_lock = self.plugins_handles.lock().unwrap();
         handles_lock.retain(|&h| h != handle);
@@ -551,9 +657,15 @@ impl PluginApi for PluginsRegistry {
                 info!("Reloading plugin: {:?}", plugin.path);
                 let new_plugin = Plugin::load(&plugin.path, plugin.hot_reloadable, true).unwrap();
                 // unload the old plugin
-                plugin.unload_plugin(&self.context, self.api_registry.clone(), true);
+                let unloaded = plugin.unload_plugin(&self.context, self.api_registry.clone(), true);
+                if !unloaded {
+                    error!("Failed to unload plugin when reload: {}", plugin);
+                }
                 // load new plugin
-                new_plugin.load_plugin(&self.context, self.api_registry.clone(), true);
+                let loaded = new_plugin.load_plugin(&self.context, self.api_registry.clone(), true);
+                if !loaded {
+                    error!("Failed to load plugin when reload: {}", new_plugin);
+                }
                 // replace the old plugin with the new one
                 let old_plugin = std::mem::replace(&mut *plugin, new_plugin);
                 // add the old plugin to the unloaded plugins
@@ -561,7 +673,7 @@ impl PluginApi for PluginsRegistry {
                 unload_lock.push(old_plugin);
             }
             Ok(false) => {
-                info!("Failed to reload plugin: {:?}", plugin.path);
+                error!("Failed to reload plugin: {:?}", plugin.path);
             }
             Err(e) => {
                 error!("Failed to check if plugin is loaded: {:?}", e);
@@ -603,37 +715,25 @@ impl PluginApi for PluginsRegistry {
 
         // Check if the current plugin is modified
         let current_handle = handles[index];
-        let is_modified = if let Some(plugin_lock) = plugins.get(current_handle.0) {
-            let plugin = plugin_lock.lock().expect("Failed to lock plugin");
-            if plugin.hot_reloadable {
-                // Get current modification time
-                if let Ok(metadata) = std::fs::metadata(&plugin.path) {
-                    if let Ok(modified) = metadata.modified() {
-                        if let Ok(modified_secs) = modified
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_secs())
-                        {
-                            modified_secs != plugin.last_modified
-                        } else {
-                            // debug!("1");
-                            false
-                        }
-                    } else {
-                        // debug!("2");
-                        false
-                    }
-                } else {
-                    // debug!("3");
-                    false
+        let is_modified = plugins
+            .get(current_handle.0)
+            .and_then(|plugin_lock| {
+                let plugin = plugin_lock.lock().expect("Failed to lock plugin");
+                if !plugin.hot_reloadable {
+                    return None;
                 }
-            } else {
-                // debug!("4");
-                false
-            }
-        } else {
-            // debug!("5");
-            false
-        };
+
+                let modified_time = std::fs::metadata(&plugin.path)
+                    .ok()?
+                    .modified()
+                    .ok()?
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()?
+                    .as_secs();
+
+                Some(modified_time != plugin.last_modified)
+            })
+            .unwrap_or(false);
         debug!(
             "check hot reload tick: {}, is_modified: {}",
             index, is_modified

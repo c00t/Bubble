@@ -62,14 +62,17 @@ use bubble_core::tracing::{self, info, instrument};
 pub fn load_plugin(
     context: &PluginContext,
     api_registry_api: ApiHandle<dyn ApiRegistryApi>,
-    is_reload: bool,
-) {
-    context.load();
+    _is_reload: bool,
+) -> bool {
+    let Ok(_) = context.load(&api_registry_api) else {
+        return false;
+    };
     let api_registry_api_local = api_registry_api.get().unwrap();
     test_instrument(1);
     // add hot reload test api to it
     api_registry_api_local.local_set(HotReloadTestApiImpl::builder().build());
     // info!("Loaded hot_reload_plugin({})", is_reload);
+    true
 }
 
 #[instrument]
@@ -83,7 +86,7 @@ pub fn unload_plugin(
     context: &PluginContext,
     api_registry_api: ApiHandle<dyn ApiRegistryApi>,
     is_reload: bool,
-) {
+) -> bool {
     let api_registry_api_local = api_registry_api.get().unwrap();
     // if is_reload is true, we don't need to remove the old api before loading the new one
     // because the new one will overwrite the old one, while remove will cause the old api struct to be dropped
@@ -91,6 +94,7 @@ pub fn unload_plugin(
         api_registry_api_local.local_remove::<DynHotReloadTestApi>();
     }
     // info!("Unloaded hot_reload_plugin({})", is_reload);
+    true
 }
 
 #[no_mangle]

@@ -582,7 +582,7 @@ fn main() {
         task_system_api.get().unwrap().num_threads()
     );
 
-    info!(">>>>info log");
+    // info!(">>>>info log");
     let q = plugin_api
         .get()
         .unwrap()

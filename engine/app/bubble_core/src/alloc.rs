@@ -1,3 +1,16 @@
+//! Custom memory allocator for Bubble applications
+//!
+//! This module provides a custom memory allocator implementation that is used by all binary crates
+//! in the Bubble project. It exports a dynamic library-based allocator through the `dyalloc` submodule
+//! which implements the standard [`GlobalAlloc`] trait.
+//!
+//! The allocator is loaded dynamically at runtime from a platform-specific shared library:
+//! - Windows: `bubble_alloc.dll`
+//! - Other platforms: `libbubble_alloc.so`/`libbubble_alloc.dylib`
+//!
+//! When the `custom_alloc_lib` feature is enabled, the library path can be customized via
+//! the `BUBBLE_ALLOC_LIB` environment variable.
+
 pub(crate) mod dyalloc {
     use std::alloc::{GlobalAlloc, Layout};
     #[allow(unused_imports)]
