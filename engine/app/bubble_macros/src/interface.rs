@@ -72,7 +72,7 @@ pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
         let last_segment = path.segments.last()
             .expect("Interface trait path should have at least one segment");
         let interface_trait_last_path = &last_segment.ident;
-        let register_interface_fn_name = format_ident!("register_{}", snake_case(&interface_trait_last_path.to_string()));
+        let register_interface_fn_name = format_ident!("register_{}", snake_case(&struct_name.to_string()));
         let doc_comment = format!("Register one {} instance into the API registry", interface_trait_last_path);
         let dyn_type_ident = dyn_ident(&last_segment.ident);
         quote! {

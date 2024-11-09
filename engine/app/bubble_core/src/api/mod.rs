@@ -89,39 +89,6 @@ pub trait InterfaceConstant {
     const VERSION: Version;
 }
 
-#[macro_export]
-macro_rules! impl_interface {
-    ($struct_name:ident, $api_name:ident, ($major:expr, $minor:expr,$patch:expr)) => {
-        pub mod constants {
-            use super::$struct_name;
-            use super::UniqueId;
-            use super::UniqueTypeId;
-            use super::Version;
-
-            pub const NAME: &'static str = ::std::stringify!($api_name);
-            pub const VERSION: self::Version = self::Version::new($major, $minor, $patch);
-            pub const INTERFACE_ID: UniqueId = $struct_name::TYPE_ID;
-        }
-
-        impl self::InterfaceConstant for $struct_name {
-            const NAME: &'static str = self::constants::NAME;
-            const VERSION: self::Version = self::constants::VERSION;
-        }
-
-        impl self::Interface for $struct_name {
-            fn name(&self) -> &'static str {
-                <Self as self::InterfaceConstant>::NAME
-            }
-            fn version(&self) -> self::Version {
-                <Self as self::InterfaceConstant>::VERSION
-            }
-            fn id(&self) -> UniqueId {
-                <Self as self::InterfaceConstant>::ID
-            }
-        }
-    };
-}
-
 pub mod api_registry_api;
 pub mod bump_allocator_api;
 pub mod plugin_api;
@@ -137,5 +104,5 @@ pub mod prelude {
         TraitcastTarget, TraitcastableAny, TraitcastableAnyInfra, TraitcastableAnyInfraExt,
         TraitcastableTo, UniqueId, UniqueTypeId, Version,
     };
-    pub use crate::impl_interface;
+    pub use crate::bon::{bon, builder};
 }
