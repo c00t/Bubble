@@ -637,12 +637,12 @@ fn main() {
     // thread::sleep(std::time::Duration::from_secs(10));
 
     // remove task system api
-    let q = api_registry_api
-        .get()
-        .unwrap()
-        .local_remove::<dyn TaskSystemApi>();
-    // .remove(shared::task_system_api_constants::NAME, shared::task_system_api_constants::VERSION);
-    drop(q); // task: strong count 6
+    // let q = api_registry_api
+    //     .get()
+    //     .unwrap()
+    //     .local_remove::<dyn TaskSystemApi>();
+    // // .remove(shared::task_system_api_constants::NAME, shared::task_system_api_constants::VERSION);
+    // drop(q); // task: strong count 6
     container.unload_plugin(); // task: strong count 5
     container2.unload_plugin(); // task: strong count 4
 
@@ -699,10 +699,10 @@ fn main() {
                     async move {
                         let plugin_api = plugin_api.get().unwrap();
                         let reload = plugin_api.check_hot_reload_tick();
-                        // println!("hot reload tick: {}", reload);
                         if reload {
-                            let hot_reload_test_api = hot_reload_test_api.get().unwrap();
-                            info!(test_string = hot_reload_test_api.get_test_string());
+                            info!(
+                                test_string = hot_reload_test_api.get().unwrap().get_test_string()
+                            );
                         }
                         let b = tick().await;
                         tracing::event!(
