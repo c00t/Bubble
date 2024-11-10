@@ -223,7 +223,10 @@ where
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self._guard.as_ref().downcast_ref().unwrap()
+        self._guard
+            .as_ref()
+            .downcast_ref()
+            .expect("Invalid LocalApiHandle")
     }
 }
 
@@ -339,6 +342,30 @@ impl AnyApiHandle {
     }
 }
 
+impl Api for AnyApiHandle {
+    fn name(&self) -> &'static str {
+        self.0
+            .load()
+            .and_then(|guard| {
+                let trait_cast_any = guard.as_ref();
+                let box_api: &dyn Api = trait_cast_any.downcast_ref()?;
+                Some(box_api.name())
+            })
+            .expect("Invalid AnyApiHandle")
+    }
+
+    fn version(&self) -> Version {
+        self.0
+            .load()
+            .and_then(|guard| {
+                let trait_cast_any = guard.as_ref();
+                let box_api: &dyn Api = trait_cast_any.downcast_ref()?;
+                Some(box_api.version())
+            })
+            .expect("Invalid AnyApiHandle")
+    }
+}
+
 impl std::fmt::Debug for AnyApiHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Some((name, version)) = self.0.load().and_then(|guard| {
@@ -388,6 +415,41 @@ impl AnyInterfaceHandle {
             inner: self,
             _phantom_type: marker::PhantomData,
         }
+    }
+}
+
+impl Interface for AnyInterfaceHandle {
+    fn name(&self) -> &'static str {
+        self.0
+            .load()
+            .and_then(|guard| {
+                let trait_cast_any = guard.as_ref();
+                let box_api: &dyn Interface = trait_cast_any.downcast_ref()?;
+                Some(box_api.name())
+            })
+            .expect("Invalid AnyInterfaceHandle")
+    }
+
+    fn version(&self) -> Version {
+        self.0
+            .load()
+            .and_then(|guard| {
+                let trait_cast_any = guard.as_ref();
+                let box_api: &dyn Interface = trait_cast_any.downcast_ref()?;
+                Some(box_api.version())
+            })
+            .expect("Invalid AnyInterfaceHandle")
+    }
+
+    fn id(&self) -> UniqueId {
+        self.0
+            .load()
+            .and_then(|guard| {
+                let trait_cast_any = guard.as_ref();
+                let box_api: &dyn Interface = trait_cast_any.downcast_ref()?;
+                Some(box_api.id())
+            })
+            .expect("Invalid AnyInterfaceHandle")
     }
 }
 
@@ -444,21 +506,47 @@ pub enum ApiError {
 pub trait ApiRegistryApi: Api {
     /// Set an api with specific name and version.
     ///
+    /// It may store multiple implementations of the same api, but with different versions.
+    /// When you set a new version of an api, it will replace all compatible <name,version> entries with the new version api.
+    /// eg. if you set a new version of an api, and the old version is 1.2.3, and the new version is 1.2.4,
+    /// then the compatible entries is `<name,1.2.3> -> [1.2.3]`, after set, the compatible entries will be `<name,1.2.3> -> [1.2.4]`.
+    /// Now the registry contains two associated entries: `<name,1.2.3> -> [1.2.4]` and `<name,1.2.4> -> [1.2.4]`.
+    ///
     /// Typically, if you want to register an api, you create a `Box<dyn YourApiTraitName>` or `Box<YourApiStructName>`,
     /// and then use [`AnyApiHandle::from<Box<T>>`] where `T:'static + TraitcastableAny` convert it to `AnyApiHandle`.
     /// Or if you using #[define_api] to define your api, you can use the public functions exposed as `pub fn get_your_api_trait_name() -> ApiHandle<dyn YourApiTrait>`.
+    ///
+    /// ## TODO
+    ///
+    /// We can remove the name and version params in the future, and use the name and version inside [`AnyApiHandle`] instead.
+    /// I don't know it's needed or not, because we already have the helper function [`LocalApiHandle<dyn ApiResitryApi>::local_set`].
+    /// And the only way you can access an api is getting a [`LocalApiHandle`] first.
+    ///
+    /// Currently, it will force overwrite the api if the api with the same name and version already exists.
+    /// Whether we need an overwrite enable flag?
     fn set(&self, name: &'static str, version: Version, api: AnyApiHandle) -> AnyApiHandle;
     /// Remove an api with specific name and version.
+    ///
+    /// It will remove implementation of exact <api,version> pair. No semver checking.
+    /// So if you set a new version of one api, and then remove the it, with the new version,
+    /// the old `<name,version>` entry will still hold the new version api.
     ///
     /// Though removed, plugins can still access the api if they have a reference to it.
     /// Return None if the api not found.
     fn remove(&self, name: &'static str, version: Version) -> Option<AnyApiHandle>;
     /// Find an api with specific name and version.
     ///
+    /// It uses "compatible" updates checking([`semver::Op::Caret`]) in [`semver::Op`], so:
+    /// - `^I.J.K (for I>0)` — equivalent to `>=I.J.K, <(I+1).0.0`
+    /// - `^0.J.K (for J>0)` — equivalent to `>=0.J.K, <0.(J+1).0`
+    /// - `^0.0.K` — equivalent to `=0.0.K`
+    ///
     /// It will return a [`Arc`] which points to a null pointer if the api not found,
     /// Be careful, you shouldn't access the api handle when you're inside `load_plugin`,
     /// and you shouldn't access the api handle when the plugin is unloaded.
     fn find(&self, name: &'static str, version: Version) -> AnyApiHandle;
+    /// Find an api with specific name and version, return None if not found.
+    fn get_optional(&self, name: &'static str, version: Version) -> Option<AnyApiHandle>;
     /// Clear and shut down the api registry. Currently not implemented.
     ///
     /// ## Note
@@ -467,22 +555,64 @@ pub trait ApiRegistryApi: Api {
     ///
     /// It will swap all internal ptr to null
     fn shutdown(&self);
-    fn ref_counts(&self);
-
+    /// Add an interface with specific name and version.
+    ///
+    /// It may store multiple implementations of the same interface, but with different versions.
+    /// When you set a new version of an interface, it will push the new version interface to all compatible <name,version> entries.
+    /// eg. if you set a new version of an interface, and the old version is 1.2.3, and the new version is 1.2.4,
+    /// then the compatible entries is `<name,1.2.3> -> Vec<[1.2.3 instance1, 1.2.3 instance2]>`, after set, the compatible entries will be
+    /// `<name,1.2.3> -> Vec<[1.2.3 instance1, 1.2.3 instance2, 1.2.4 instance1]>`.
+    /// Now the registry contains two associated entries:
+    /// `<name,1.2.3> -> Vec<[1.2.3 instance1, 1.2.3 instance2, 1.2.4 instance1]>` and `<name,1.2.4> -> Vec<[1.2.4 instance1]>`.
+    ///
+    /// ## Example
     fn add_interface(
         &self,
         name: &'static str,
         version: Version,
         interface: AnyInterfaceHandle,
     ) -> AnyInterfaceHandle;
-
+    /// Remove all interfaces with specific instance id from all compatible <name,version> entries.
+    ///
+    /// Different from [`ApiRegistryApi::remove`], it will remove the specific instance of interface from all
+    /// compatible <name,version> entries.
+    ///
+    /// eg1. if you remove an `instance1` of interface with version 1.2.3, and the registry contains
+    /// `<name,1.2.3> -> Vec<[1.2.3 instance1, 1.2.3 instance2, 1.2.4 instance1]>` and `<name,1.2.4> -> Vec<[1.2.4 instance1]>`,
+    /// after remove, the registry will be `<name,1.2.3> -> Vec<[1.2.3 instance2]>` and `<name,1.2.4> -> Vec<[1.2.4 instance1]>`.
+    ///
+    /// eg2. if you remove an instance of `interface1` with version 1.2.4, and the registry contains
+    /// `<name,1.2.3> -> Vec<[1.2.3 instance1, 1.2.3 instance2, 1.2.4 instance1]>` and `<name,1.2.4> -> Vec<[1.2.4 instance1]>`,
+    /// after remove, the registry will be `<name,1.2.3> -> Vec<[1.2.3 instance1, 1.2.3 instance2, 1.2.4 instance1]>` and `<name,1.2.4> -> Vec<[]>`.
+    ///
+    /// ## Note
+    ///
+    /// Normally, your will remove interface when the plugin is unloaded(either reloading or shutting down). It's different from [`ApiRegistryApi::remove`],
+    /// which is used to remove the specific version of an api.
+    ///
+    fn remove_interface(&self, name: &'static str, from_version: Version, instance_id: UniqueId);
+    /// Get the number of interfaces with specific name and compatible version.
+    ///
+    /// ## Performance Note
+    ///
+    /// Currently, the implementation is count all compatible entries and return the total number of instances.
+    /// So it's same as [`ApiRegistryApi::get_interfaces`].
     fn interface_count(&self, name: &'static str, version: Version) -> Option<usize>;
+    /// Get all interfaces with specific name and compatible version.
     fn get_interfaces(
         &self,
         name: &'static str,
         version: Version,
     ) -> Option<Vec<AnyInterfaceHandle>>;
+    /// Get the first interface with specific name and compatible version.
     fn first_interface(&self, name: &'static str, version: Version) -> Option<AnyInterfaceHandle>;
+    /// Get interface with specific name and compatible version, check it's the only one.
+    fn single_interface(
+        &self,
+        name: &'static str,
+        version: Version,
+    ) -> Option<(UniqueId, AnyInterfaceHandle)>;
+    /// Get all available versions of an api.
     fn available_api_versions(&self, name: &'static str) -> Vec<Version>;
 }
 
@@ -507,11 +637,20 @@ struct InterfaceEntry {
 struct ApiRegistry {
     /// Store api which is registered by plugins.
     ///
-    /// 1 implementation per api
+    /// 1 implementation per <api,version> pair
+    ///
+    /// ## TODO
+    ///
+    /// Change to lock free hash map, but i don't know whether the performance impact is huge or not.
+    /// Because the size of this hashmap is about x00. Maybe a fixed size lock free hashmap is sufficient.
     pub inner_apis: RwLock<FxHashMap<VersionedName, ApiEntry>>,
     /// Store implementationss which is registered by plugins
     ///
-    /// multiple implementations per interface
+    /// multiple implementations per <interface,version> pair
+    ///
+    /// ## TODO
+    ///
+    /// Same as [`inner_apis`], change to lock free hash map. But the size of this hashmap is expected to be larger than [`inner_apis`].
     pub inner_interfaces: RwLock<FxHashMap<VersionedName, Vec<InterfaceEntry>>>,
 }
 
@@ -537,6 +676,8 @@ pub fn get_api_registry_api() -> ApiHandle<dyn ApiRegistryApi> {
     ApiRegistry::builder().build()
 }
 
+/// The global api registry.
+///
 /// It will be managed by the main executable, so no need to use dyntls.
 static API_REGISTRY: OnceLock<ApiHandle<dyn ApiRegistryApi>> = OnceLock::new();
 
@@ -562,11 +703,56 @@ impl ApiRegistry {
         }
     }
 
-    pub fn set(&self, name: &'static str, version: Version, api: AnyApiHandle) -> AnyApiHandle {
-        let id = VersionedName::new(name, version.clone());
-        info!("Setting Api: {}", id);
+    pub fn set(
+        &self,
+        actual_name: &'static str,
+        actual_version: Version,
+        api: AnyApiHandle,
+    ) -> AnyApiHandle {
+        // check that name and version is match, if use fixed size lock free hashmap, may need another size check
+        debug_assert!(actual_name == api.name(), "name mismatch");
+        debug_assert!(actual_version == api.version(), "version mismatch");
+        let id = VersionedName::new(actual_name, actual_version.clone());
+        info!("Setting Api: actual {}", id);
 
         let mut w_lock = self.inner_apis.write().unwrap();
+
+        // check that current hashmap has the api with compatible version?
+        // the api in hashmap is compatible with the actual api version you passed in
+        // eg1. actual_version is 1.2.3, and hashmap has 1.2.3, 1.2.4, 2.0.0
+        // then the matches is [1.2.3].
+        // eg2. actual_version is 1.2.5, and hashmap has 1.2.3, 1.2.4, 2.0.0
+        // then the matches is [1.2.3, 1.2.4].
+        // eg3. actual_version is 1.3.0, and hashmap has 1.2.3, 1.2.4
+        // then the matches is [1.2.3,1.2.4].
+        //
+        // the rule is test in [`tests::test_set_version_matching`]
+        let best_match: Vec<_> = w_lock
+            .keys()
+            .filter(|VersionedName { name, version }| {
+                let version_cmper = semver::Comparator {
+                    op: semver::Op::Caret,
+                    major: version.major,
+                    minor: Some(version.minor),
+                    patch: Some(version.patch),
+                    pre: version.pre.clone(),
+                };
+                version_cmper.matches(&actual_version) && *name == actual_name
+            })
+            .map(|x| x.clone())
+            .collect();
+
+        for match_id in best_match {
+            if match_id == id {
+                continue;
+            }
+            info!("Replace {} with actual {}", match_id, id);
+            w_lock.entry(match_id.clone()).and_modify(|entry| {
+                info!("Overwriting: {}", match_id);
+                let arc = &entry.inner.0;
+                arc.store(api.0.load().as_ref());
+            });
+        }
 
         // if don't have the api, create a new one inside registry,
         // if specific entry is already exist, update the api using atomic store
@@ -584,26 +770,72 @@ impl ApiRegistry {
 
     pub fn add_interface(
         &self,
-        name: &'static str,
-        version: Version,
+        actual_name: &'static str,
+        actual_version: Version,
         interface: AnyInterfaceHandle,
     ) -> AnyInterfaceHandle {
-        let id = VersionedName::new(name, version);
+        // check that name and version is match
+        debug_assert!(actual_name == interface.name(), "name mismatch");
+        debug_assert!(actual_version == interface.version(), "version mismatch");
+        let id = VersionedName::new(actual_name, actual_version.clone());
+        info!("Adding Interface: actual {}", id);
+
         let mut w_lock = self.inner_interfaces.write().unwrap();
-        let _raw_entry = w_lock
+
+        // Find compatible version entries
+        let best_matches: Vec<_> = w_lock
+            .keys()
+            .filter(|VersionedName { name, version }| {
+                let version_cmper = semver::Comparator {
+                    op: semver::Op::Caret,
+                    major: version.major,
+                    minor: Some(version.minor),
+                    patch: Some(version.patch),
+                    pre: version.pre.clone(),
+                };
+                version_cmper.matches(&actual_version) && *name == actual_name
+            })
+            .map(|x| x.clone())
+            .collect();
+
+        // Add interface to all compatible version entries
+        for match_id in best_matches {
+            if match_id == id {
+                continue;
+            }
+            info!(
+                "Adding to compatible version entry: {} while adding actual {}",
+                match_id, id
+            );
+            w_lock.entry(match_id).and_modify(|entries| {
+                entries.push(InterfaceEntry {
+                    inner: interface.clone(),
+                });
+            });
+        }
+
+        // Add to the actual version entry
+        w_lock
             .entry(id)
-            .and_modify(|entry| {
-                entry.push(InterfaceEntry {
+            .and_modify(|entries| {
+                entries.push(InterfaceEntry {
                     inner: interface.clone(),
                 });
             })
-            .or_insert(Vec::new());
+            .or_insert_with(|| {
+                vec![InterfaceEntry {
+                    inner: interface.clone(),
+                }]
+            });
+
         interface
     }
 
     pub fn remove(&self, name: &'static str, version: Version) -> Option<AnyApiHandle> {
+        // only remove the exact <name,version> pair
         let mut w_lock = self.inner_apis.write().unwrap();
         let id = VersionedName::new(name, version);
+        info!("Removing Api: {}", id);
         let entry = w_lock.remove(&id).map(|entry| entry.inner);
         entry
     }
@@ -611,53 +843,93 @@ impl ApiRegistry {
     pub fn remove_interface(
         &self,
         name: &'static str,
-        version: Version,
+        from_version: Version,
         instance_id: UniqueId,
-    ) -> Option<AnyInterfaceHandle> {
+    ) {
         let mut w_lock = self.inner_interfaces.write().unwrap();
-        let id = VersionedName::new(name, version);
-        let mut result = None;
-        w_lock.entry(id).and_modify(|entries| {
-            let pos = entries.iter_mut().position(|entry| {
-                entry
-                    .inner
-                    .0
-                    .load()
-                    .and_then(|guard| {
-                        let trait_cast_any = guard.as_ref();
-                        let box_interface: &dyn Interface = trait_cast_any.downcast_ref()?;
-                        Some(box_interface.id() == instance_id)
-                    })
-                    .unwrap_or(false)
+        let id = VersionedName::new(name, from_version.clone());
+        info!("Removing Interface: {}", id);
+
+        // Find all compatible version entries
+        let compatible_versions: Vec<_> = w_lock
+            .keys()
+            .filter(
+                |VersionedName {
+                     name: entry_name,
+                     version: entry_version,
+                 }| {
+                    let version_cmper = semver::Comparator {
+                        op: semver::Op::Caret,
+                        major: from_version.major,
+                        minor: Some(from_version.minor),
+                        patch: Some(from_version.patch),
+                        pre: from_version.pre.clone(),
+                    };
+                    version_cmper.matches(entry_version) && *entry_name == name
+                },
+            )
+            .map(|x| x.clone())
+            .collect();
+
+        // Remove the interface from all compatible version entries
+        for compatible_id in compatible_versions {
+            info!("Removing from compatible version entry: {}", compatible_id);
+            w_lock.entry(compatible_id).and_modify(|entries| {
+                let pos = entries.iter_mut().position(|entry| {
+                    entry
+                        .inner
+                        .0
+                        .load()
+                        .and_then(|guard| {
+                            let trait_cast_any = guard.as_ref();
+                            let box_interface: &dyn Interface = trait_cast_any.downcast_ref()?;
+                            Some(box_interface.id() == instance_id)
+                        })
+                        .unwrap_or(false)
+                });
+                if let Some(pos) = pos {
+                    entries.remove(pos);
+                }
             });
-            if let Some(pos) = pos {
-                result = Some(entries.remove(pos).inner);
-            }
-        });
-        result
+        }
     }
 
-    pub fn get(&self, name: &'static str, version: Version) -> AnyApiHandle {
-        let id = VersionedName::new(name, version);
-        info!("Getting Api: {}", id);
+    pub fn get(&self, expected_name: &'static str, expected_version: Version) -> AnyApiHandle {
+        let id = VersionedName::new(expected_name, expected_version.clone());
+        info!("Getting Api: expecting {}", id);
         let r_lock = self.inner_apis.read().unwrap();
 
         // Find the best matching version
         let best_match = r_lock
             .keys()
-            .filter(|key| key.name == name)
+            .filter(
+                |VersionedName {
+                     name,
+                     version: actual_version,
+                     ..
+                 }| {
+                    let version_cmper = semver::Comparator {
+                        op: semver::Op::Caret,
+                        major: expected_version.major,
+                        minor: Some(expected_version.minor),
+                        patch: Some(expected_version.patch),
+                        pre: expected_version.pre.clone(),
+                    };
+                    version_cmper.matches(&actual_version) && *name == expected_name
+                },
+            )
             .max_by(|a, b| a.version.cmp(&b.version));
 
         if let Some(best_match) = best_match {
             if let Some(raw_entry) = r_lock.get(&best_match) {
-                info!("Found {} when get", best_match);
+                info!("Found {} while expecting {}", best_match, id);
                 return raw_entry.inner.clone();
             }
         }
 
         // If no match found, create a new entry
         drop(r_lock);
-        info!("Not found {} when get", id);
+        info!("Not found expecting {}, creating new entry for it", id);
         let mut w_lock = self.inner_apis.write().unwrap();
 
         let raw_entry = w_lock.entry(id).or_insert_with(|| {
@@ -669,15 +941,45 @@ impl ApiRegistry {
         raw_entry.inner.clone()
     }
 
-    pub fn ref_counts(&self) {
-        // loop through the hash map and print the ref counts
+    fn get_optional(&self, name: &'static str, version: Version) -> Option<AnyApiHandle> {
+        let id = VersionedName::new(name, version.clone());
+        info!("Getting Optional Api: expecting {}", id);
+        let r_lock = self.inner_apis.read().unwrap();
+
+        // Find the best matching version
+        let best_match = r_lock
+            .keys()
+            .filter(
+                |VersionedName {
+                     name: entry_name,
+                     version: actual_version,
+                 }| {
+                    let version_cmper = semver::Comparator {
+                        op: semver::Op::Caret,
+                        major: version.major,
+                        minor: Some(version.minor),
+                        patch: Some(version.patch),
+                        pre: version.pre.clone(),
+                    };
+                    version_cmper.matches(&actual_version) && *entry_name == name
+                },
+            )
+            .max_by(|a, b| a.version.cmp(&b.version));
+
+        // Return the entry if found, otherwise None
+        if let Some(best_match) = best_match {
+            if let Some(raw_entry) = r_lock.get(&best_match) {
+                info!("Found {} while expecting {}", best_match, id);
+                return Some(raw_entry.inner.clone());
+            }
+        }
+
+        info!("Not found expecting {}", id);
+        None
     }
 
     pub fn interface_count(&self, name: &'static str, version: Version) -> Option<usize> {
-        let id = VersionedName::new(name, version);
-        let r_lock = self.inner_interfaces.read().unwrap();
-
-        r_lock.get(&id).map(|v| v.len())
+        self.get_interfaces(name, version).map(|v| v.len())
     }
 
     pub fn get_interfaces(
@@ -685,11 +987,54 @@ impl ApiRegistry {
         name: &'static str,
         version: Version,
     ) -> Option<Vec<AnyInterfaceHandle>> {
-        let id = VersionedName::new(name, version);
+        let id = VersionedName::new(name, version.clone());
+        info!("Getting Interfaces: expecting {}", id);
         let r_lock = self.inner_interfaces.read().unwrap();
-        r_lock
-            .get(&id)
-            .map(|v| v.iter().map(|v| v.inner.clone()).collect())
+
+        // Find all compatible version entries
+        let compatible_entries: Vec<_> = r_lock
+            .iter()
+            .filter(
+                |(
+                    VersionedName {
+                        name: entry_name,
+                        version: entry_version,
+                    },
+                    _,
+                )| {
+                    let version_cmper = semver::Comparator {
+                        op: semver::Op::Caret,
+                        major: version.major,
+                        minor: Some(version.minor),
+                        patch: Some(version.patch),
+                        pre: version.pre.clone(),
+                    };
+                    version_cmper.matches(entry_version) && *entry_name == name
+                },
+            )
+            .flat_map(|(_, entries)| entries.iter().map(|e| e.inner.clone()))
+            .collect();
+
+        if compatible_entries.is_empty() {
+            info!("Not found expecting interfaces {}", id);
+            return None;
+        }
+
+        // Remove duplicates by instance ID
+        let mut unique_entries = Vec::new();
+        let mut seen_ids = std::collections::HashSet::new();
+
+        for handle in compatible_entries {
+            if let Some(local_handle) = handle.clone().downcast::<dyn Interface>().get() {
+                let instance_id = local_handle.id();
+                if seen_ids.insert(instance_id) {
+                    unique_entries.push(handle);
+                }
+            }
+        }
+
+        info!("Found {} {} interfaces", unique_entries.len(), id);
+        Some(unique_entries)
     }
 
     pub fn first_interface(
@@ -697,11 +1042,97 @@ impl ApiRegistry {
         name: &'static str,
         version: Version,
     ) -> Option<AnyInterfaceHandle> {
-        let id = VersionedName::new(name, version);
+        let id = VersionedName::new(name, version.clone());
+        info!("Getting First Interface: expecting {}", id);
         let r_lock = self.inner_interfaces.read().unwrap();
+
+        // Find all compatible version entries and sort by version (highest first)
         r_lock
-            .get(&id)
-            .and_then(|v| v.first().map(|v| v.inner.clone()))
+            .iter()
+            .filter(
+                |(
+                    VersionedName {
+                        name: entry_name,
+                        version: entry_version,
+                    },
+                    _,
+                )| {
+                    let version_cmper = semver::Comparator {
+                        op: semver::Op::Caret,
+                        major: version.major,
+                        minor: Some(version.minor),
+                        patch: Some(version.patch),
+                        pre: version.pre.clone(),
+                    };
+                    version_cmper.matches(entry_version) && *entry_name == name
+                },
+            )
+            .max_by(|a, b| a.0.version.cmp(&b.0.version)) // Get entry with highest compatible version
+            .and_then(|(_, entries)| entries.first()) // Get first interface from that version
+            .map(|entry| entry.inner.clone())
+    }
+
+    pub fn single_interface(
+        &self,
+        name: &'static str,
+        version: Version,
+    ) -> Option<(UniqueId, AnyInterfaceHandle)> {
+        let id = VersionedName::new(name, version.clone());
+        info!("Getting Single Interface: expecting {}", id);
+        let r_lock = self.inner_interfaces.read().unwrap();
+
+        // Find all compatible version entries
+        let compatible_entries: Vec<_> = r_lock
+            .iter()
+            .filter(
+                |(
+                    VersionedName {
+                        name: entry_name,
+                        version: entry_version,
+                    },
+                    _,
+                )| {
+                    let version_cmper = semver::Comparator {
+                        op: semver::Op::Caret,
+                        major: version.major,
+                        minor: Some(version.minor),
+                        patch: Some(version.patch),
+                        pre: version.pre.clone(),
+                    };
+                    version_cmper.matches(entry_version) && *entry_name == name
+                },
+            )
+            .flat_map(|(_, entries)| entries.iter().map(|e| e.inner.clone()))
+            .collect();
+
+        if compatible_entries.is_empty() {
+            info!("Not found expecting interfaces {}", id);
+            return None;
+        }
+
+        // Track unique instances by ID
+        let mut unique_entry = None;
+        let mut seen_ids = std::collections::HashSet::new();
+
+        for handle in compatible_entries {
+            if let Some(local_handle) = handle.clone().downcast::<dyn Interface>().get() {
+                let instance_id = local_handle.id();
+                if !seen_ids.insert(instance_id) {
+                    // Found duplicate ID
+                    continue;
+                }
+
+                if unique_entry.is_some() {
+                    info!("Found more than one unique implementation {}", id);
+                    // Found more than one unique implementation
+                    return None;
+                }
+
+                unique_entry = Some((instance_id, handle));
+            }
+        }
+
+        unique_entry
     }
 
     pub fn available_api_versions(&self, name: &'static str) -> Vec<Version> {
@@ -719,6 +1150,7 @@ impl ApiRegistry {
     fn shutdown(&self) {
         // for all entry in the hash map, drop the api
         self.inner_apis.write().unwrap().clear();
+        self.inner_interfaces.write().unwrap().clear();
     }
 }
 
@@ -735,11 +1167,14 @@ impl ApiRegistryApi for ApiRegistry {
         self.get(name, version)
     }
 
-    fn ref_counts(&self) {}
+    fn get_optional(&self, name: &'static str, version: Version) -> Option<AnyApiHandle> {
+        self.get_optional(name, version)
+    }
 
     fn shutdown(&self) {
         self.shutdown();
     }
+
     fn add_interface(
         &self,
         name: &'static str,
@@ -765,8 +1200,20 @@ impl ApiRegistryApi for ApiRegistry {
         self.first_interface(name, version)
     }
 
+    fn single_interface(
+        &self,
+        name: &'static str,
+        version: Version,
+    ) -> Option<(UniqueId, AnyInterfaceHandle)> {
+        self.single_interface(name, version)
+    }
+
     fn available_api_versions(&self, name: &'static str) -> Vec<Version> {
         self.available_api_versions(name)
+    }
+
+    fn remove_interface(&self, name: &'static str, from_version: Version, instance_id: UniqueId) {
+        self.remove_interface(name, from_version, instance_id)
     }
 }
 
@@ -790,10 +1237,6 @@ impl<'local> LocalApiHandle<'local, dyn ApiRegistryApi> {
         self.deref().shutdown()
     }
 
-    pub fn local_ref_counts(&self) {
-        self.deref().ref_counts()
-    }
-
     pub fn local_add_interface<T: InterfaceConstant + Interface + ?Sized>(
         &self,
         interface: InterfaceHandle<T>,
@@ -801,6 +1244,15 @@ impl<'local> LocalApiHandle<'local, dyn ApiRegistryApi> {
         self.deref()
             .add_interface(T::NAME, T::VERSION, interface.inner)
             .downcast()
+    }
+
+    pub fn local_remove_interface<T: InterfaceConstant + Interface + ?Sized>(
+        &self,
+        from_version: Version,
+        instance_id: UniqueId,
+    ) {
+        self.deref()
+            .remove_interface(T::NAME, from_version, instance_id)
     }
 
     pub fn local_interface_count<T: InterfaceConstant + Interface + ?Sized>(
@@ -890,5 +1342,109 @@ impl AnyApiHandle {
     /// Creates a new weak handle to this API
     pub fn downgrade(&self) -> WeakAnyApiHandle {
         WeakAnyApiHandle(Arc::downgrade(&self.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn find_matching_versions(
+        actual_version: Version,
+        available_versions: Vec<Version>,
+    ) -> Vec<Version> {
+        let actual_name = "test_api";
+        let versioned_names: FxHashMap<VersionedName, ()> = available_versions
+            .into_iter()
+            .map(|v| (VersionedName::new(actual_name, v), ()))
+            .collect();
+
+        versioned_names
+            .keys()
+            .filter(|VersionedName { name, version }| {
+                let version_cmper = semver::Comparator {
+                    op: semver::Op::Caret,
+                    major: version.major,
+                    minor: Some(version.minor),
+                    patch: Some(version.patch),
+                    pre: version.pre.clone(),
+                };
+                version_cmper.matches(&actual_version) && *name == actual_name
+            })
+            .map(|v| v.version.clone())
+            .collect()
+    }
+
+    /// Test examples from [`ApiRegistry::set`]
+    #[test]
+    fn test_set_version_matching() {
+        // Example 1: actual_version is 1.2.3, and hashmap has 1.2.3, 1.2.4, 2.0.0
+        // then the matches is [1.2.3]
+        assert_eq!(
+            find_matching_versions(
+                Version::new(1, 2, 3),
+                vec![
+                    Version::new(1, 2, 3),
+                    Version::new(1, 2, 4),
+                    Version::new(2, 0, 0),
+                ]
+            ),
+            vec![Version::new(1, 2, 3)]
+        );
+
+        // Example 2: actual_version is 1.2.5, and hashmap has 1.2.3, 1.2.4, 2.0.0
+        // then the matches is [1.2.3, 1.2.4]
+        assert_eq!(
+            find_matching_versions(
+                Version::new(1, 2, 5),
+                vec![
+                    Version::new(1, 2, 3),
+                    Version::new(1, 2, 4),
+                    Version::new(2, 0, 0),
+                ]
+            )
+            .sort(),
+            vec![Version::new(1, 2, 3), Version::new(1, 2, 4)].sort()
+        );
+
+        // Example 3: actual_version is 1.3.0, and hashmap has 1.2.3, 1.2.4
+        // then the matches is [1.2.3, 1.2.4]
+        assert_eq!(
+            find_matching_versions(
+                Version::new(1, 3, 0),
+                vec![Version::new(1, 2, 3), Version::new(1, 2, 4),]
+            )
+            .sort(),
+            vec![Version::new(1, 2, 3), Version::new(1, 2, 4)].sort()
+        );
+
+        // Additional test cases
+        // Major version mismatch
+        assert_eq!(
+            find_matching_versions(
+                Version::new(2, 0, 0),
+                vec![Version::new(1, 2, 3), Version::new(1, 2, 4),]
+            ),
+            Vec::<Version>::new()
+        );
+
+        // Pre-release versions
+        assert_eq!(
+            find_matching_versions(
+                Version::new(1, 2, 0),
+                vec![
+                    Version::parse("1.2.0-alpha").unwrap(),
+                    Version::parse("1.2.0-beta").unwrap(),
+                    Version::new(1, 2, 0),
+                ]
+            )
+            .sort(),
+            vec![
+                Version::parse("1.2.0-alpha").unwrap(),
+                Version::parse("1.2.0-beta").unwrap(),
+                Version::new(1, 2, 0),
+            ]
+            .sort()
+        );
     }
 }

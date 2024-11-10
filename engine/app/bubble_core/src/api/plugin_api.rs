@@ -260,15 +260,14 @@ impl Plugin {
     /// * Err(std::io::Error) - Error loading the plugin, such as file not found or invalid library format
     ///
     /// ## Notes
-    /// 
+    ///
     /// If hot reloading is enabled, the plugin file will be copied to a temporary location before loading.
     /// This allows the original file to be modified while the plugin is loaded.
     ///
     /// If reloading, the plugin file will be copied to another location, with a timestamp suffix.
     fn load(path: &str, hot_reloadable: bool, is_reloading: bool) -> Result<Self, std::io::Error> {
         // Assert that is_reloading can only be true if hot_reloadable is true
-        debug_assert!(!is_reloading || hot_reloadable, 
-            "Invalid parameter combination: is_reloading can only be true if hot_reloadable is true");
+        debug_assert!(!is_reloading || hot_reloadable, "Invalid parameter combination: is_reloading can only be true if hot_reloadable is true");
         // Copy the DLL if hot reloading is enabled
         let load_path = if hot_reloadable {
             copy_dynamic_library(path, is_reloading)?

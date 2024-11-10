@@ -2,7 +2,9 @@ pub use bubble_macros::{declare_api, declare_interface, define_api, define_inter
 pub use semver::Version;
 use std::any::Any;
 pub use trait_cast_rs::{
-    make_trait_castable, make_trait_castable_decl, unique_id, TraitcastTarget, TraitcastableAny,
+    make_trait_castable, make_trait_castable_decl, make_trait_castable_decl_random_self_id,
+    make_trait_castable_decl_with_version, make_trait_castable_random_self_id, random_unique_id,
+    unique_id, unique_id_without_version_hash, TraitcastTarget, TraitcastableAny,
     TraitcastableAnyInfra, TraitcastableAnyInfraExt, TraitcastableTo, UniqueId, UniqueTypeId,
 };
 
@@ -74,7 +76,7 @@ pub trait Interface: Any + Sync + Send {
     /// Typically, it's the full name of the interface including the module hierarchy.
     fn name(&self) -> &'static str;
     /// The version of the interface.
-    /// 
+    ///
     /// ## Note
     ///
     /// When you declare an interface using [`declare_interface`], it will generate a version constant for you in a corresponding module.
@@ -136,9 +138,11 @@ pub mod prelude {
     };
     pub use super::{
         declare_api, declare_interface, define_api, define_interface, make_trait_castable,
-        make_trait_castable_decl, unique_id, Api, ApiConstant, Interface, InterfaceConstant,
-        TraitcastTarget, TraitcastableAny, TraitcastableAnyInfra, TraitcastableAnyInfraExt,
-        TraitcastableTo, UniqueId, UniqueTypeId, Version,
+        make_trait_castable_decl, make_trait_castable_decl_random_self_id,
+        make_trait_castable_decl_with_version, make_trait_castable_random_self_id,
+        random_unique_id, unique_id, unique_id_without_version_hash, Api, ApiConstant, Interface,
+        InterfaceConstant, TraitcastTarget, TraitcastableAny, TraitcastableAnyInfra,
+        TraitcastableAnyInfraExt, TraitcastableTo, UniqueId, UniqueTypeId, Version,
     };
     pub use crate::bon::{bon, builder};
 }
