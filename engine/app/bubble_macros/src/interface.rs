@@ -9,6 +9,25 @@ use syn::{
 
 use crate::shared::{dyn_ident, snake_case, Version};
 
+struct InterfaceDefineAttrWithVersion {
+    instance_version: Version,
+    interface_trait_paths: Punctuated<Path, Token![,]>,
+}
+
+impl Parse for InterfaceDefineAttrWithVersion {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let instance_version = input.parse()?;
+        input.parse::<Token![,]>()?;
+        // Parse one or more trait paths separated by commas
+        let interface_trait_paths = Punctuated::parse_terminated(input)?;
+
+        Ok(InterfaceDefineAttrWithVersion {
+            instance_version,
+            interface_trait_paths,
+        })
+    }
+}
+
 struct InterfaceDefineAttr {
     interface_trait_paths: Punctuated<Path, Token![,]>,
 }
@@ -27,6 +46,7 @@ impl Parse for InterfaceDefineAttr {
 pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
     let InterfaceDefineAttr {
+        // instance_version,
         interface_trait_paths,
     } = parse_macro_input!(attr as InterfaceDefineAttr);
 
@@ -86,14 +106,29 @@ pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     });
 
-    let expanded = quote! {
-        #[make_trait_castable(Interface, #(#trait_segments),*)]
+    let expanded;
+    // if let Some(instance_version) = instance_version {
+    //     let major = instance_version.major;
+    //     let minor = instance_version.minor;
+    //     let patch = instance_version.patch;
+    //     expanded = quote! {
+    //         #[make_trait_castable(Interface, #(#trait_segments),*, = (#major, #minor, #patch))]
+    //         #input
+
+    //         #(#impl_interface_calls)*
+
+    //         #(#register_fns)*
+    //     };
+    // } else {
+    expanded = quote! {
+        #[make_trait_castable_random_self_id(Interface, #(#trait_segments),*)]
         #input
 
         #(#impl_interface_calls)*
 
         #(#register_fns)*
     };
+    // }
 
     TokenStream::from(expanded)
 }
@@ -188,7 +223,7 @@ pub fn declare_interface(args: TokenStream, item: TokenStream) -> TokenStream {
 
         pub type #dyn_type_ident = dyn #trait_ident;
 
-        unique_id! {
+        unique_id_without_version_hash! {
             #[UniqueTypeIdVersion((#major, #minor, #patch))]
             dyn #path
         }

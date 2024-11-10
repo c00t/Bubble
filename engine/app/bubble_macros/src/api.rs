@@ -199,7 +199,7 @@ pub fn declare_api(args: TokenStream, item: TokenStream) -> TokenStream {
 
         pub type #dyn_type_ident = dyn #trait_ident;
 
-        unique_id! {
+        unique_id_without_version_hash! {
             #[UniqueTypeIdVersion((#major, #minor, #patch))]
             dyn #path
         }
