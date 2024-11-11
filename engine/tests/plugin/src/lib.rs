@@ -69,7 +69,7 @@ pub fn load_plugin(context: &Context, api_registry_api: ApiHandle<dyn ApiRegistr
     }
     let api_guard = api_registry_api.get().unwrap();
 
-    let task_system_api = api_guard.local_find::<dyn TaskSystemApi>();
+    let task_system_api = api_guard.local_find::<dyn TaskSystemApi>(None);
 
     // let apis: ApiHandle<Box<dyn Api>> = task_system.into();
 

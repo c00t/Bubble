@@ -107,6 +107,8 @@ pub struct PluginExportFns {
 pub struct PluginContext {
     /// The dyntls context
     dyntls_context: dyntls::Context,
+    /// DepId
+    pub dep_id: Option<DepId>,
 }
 
 impl fmt::Debug for PluginContext {
@@ -122,6 +124,15 @@ impl PluginContext {
     pub fn new() -> Self {
         Self {
             dyntls_context: os::thread::dyntls_context::get(),
+            dep_id: None,
+        }
+    }
+
+    /// Give the plugin a dep id
+    pub fn give_dep_id(&self, dep_id: DepId) -> Self {
+        Self {
+            dyntls_context: self.dyntls_context,
+            dep_id: Some(dep_id),
         }
     }
 
@@ -168,6 +179,8 @@ pub struct Plugin {
     pub name: String,
     /// The container of the plugin's dll
     pub container: Container<PluginExportFns>,
+    /// The dep id of the plugin
+    pub dep_id: DepId,
     /// The plugin is hot reloadable?
     pub hot_reloadable: bool,
     /// The last mofified time of the plugin dll
@@ -215,6 +228,8 @@ pub struct PluginMeta {
     pub name: String,
     /// The plugin info
     pub plugin_info: PluginInfo,
+    /// The dep id of the plugin
+    pub dep_id: DepId,
     /// The plugin is hot reloadable?
     pub hot_reloadable: bool,
     /// The last modified time of the plugin dll
@@ -265,7 +280,12 @@ impl Plugin {
     /// This allows the original file to be modified while the plugin is loaded.
     ///
     /// If reloading, the plugin file will be copied to another location, with a timestamp suffix.
-    fn load(path: &str, hot_reloadable: bool, is_reloading: bool) -> Result<Self, std::io::Error> {
+    fn load(
+        path: &str,
+        hot_reloadable: bool,
+        is_reloading: bool,
+        api_registry: &ApiHandle<dyn ApiRegistryApi>,
+    ) -> Result<Self, std::io::Error> {
         // Assert that is_reloading can only be true if hot_reloadable is true
         debug_assert!(!is_reloading || hot_reloadable, "Invalid parameter combination: is_reloading can only be true if hot_reloadable is true");
         // Copy the DLL if hot reloading is enabled
@@ -317,12 +337,16 @@ impl Plugin {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-
+        let dep_id = api_registry
+            .get()
+            .unwrap()
+            .get_dep_context(name.clone(), None);
         let plugin = Plugin {
             path: path.to_string(),
             load_path,
             name,
             container,
+            dep_id,
             hot_reloadable,
             last_modified,
         };
@@ -361,6 +385,7 @@ impl Plugin {
             load_path: self.load_path.clone(),
             name: self.name.clone(),
             plugin_info: self.container.plugin_info(),
+            dep_id: self.dep_id,
             hot_reloadable: self.hot_reloadable,
             last_modified: self.last_modified,
         }
@@ -595,11 +620,16 @@ impl PluginApi for PluginsRegistry {
             clean_up_hot_reload_copies(path);
         }
 
-        let plugin = Plugin::load(path, hot_reloadable, false).ok()?;
+        let plugin = Plugin::load(path, hot_reloadable, false, &self.api_registry).ok()?;
 
-        let loaded = plugin.load_plugin(&self.context, self.api_registry.clone(), false);
+        let plugin_context = self.context.give_dep_id(plugin.dep_id);
+        let loaded = plugin.load_plugin(&plugin_context, self.api_registry.clone(), false);
         if !loaded {
             error!("Failed to load plugin: {}", plugin);
+            self.api_registry
+                .get()
+                .unwrap()
+                .remove_dep_context(plugin.dep_id);
             return None;
         }
 
@@ -630,10 +660,16 @@ impl PluginApi for PluginsRegistry {
             return;
         }
         let plugin = plugin.unwrap().into_inner().unwrap();
-        let unloaded = plugin.unload_plugin(&self.context, self.api_registry.clone(), false);
+        let plugin_unload_context = self.context.give_dep_id(plugin.dep_id);
+        let unloaded =
+            plugin.unload_plugin(&plugin_unload_context, self.api_registry.clone(), false);
         if !unloaded {
             error!("Failed to unload plugin: {}", plugin);
         }
+        self.api_registry
+            .get()
+            .unwrap()
+            .remove_dep_context(plugin.dep_id);
         // remove the handle from the plugins handles
         let mut handles_lock = self.plugins_handles.lock().unwrap();
         handles_lock.retain(|&h| h != handle);
@@ -654,16 +690,34 @@ impl PluginApi for PluginsRegistry {
         match can_load_plugin(&plugin.path) {
             Ok(true) => {
                 info!("Reloading plugin: {:?}", plugin.path);
-                let new_plugin = Plugin::load(&plugin.path, plugin.hot_reloadable, true).unwrap();
-                // unload the old plugin
-                let unloaded = plugin.unload_plugin(&self.context, self.api_registry.clone(), true);
+                let new_plugin = Plugin::load(
+                    &plugin.path,
+                    plugin.hot_reloadable,
+                    true,
+                    &self.api_registry,
+                )
+                .unwrap();
+                // unload the old plugin, in fact, currently we don't need to record the remove operations.
+                let plugin_unload_context = self.context.give_dep_id(plugin.dep_id);
+                let unloaded =
+                    plugin.unload_plugin(&plugin_unload_context, self.api_registry.clone(), true);
                 if !unloaded {
                     error!("Failed to unload plugin when reload: {}", plugin);
                 }
+                self.api_registry
+                    .get()
+                    .unwrap()
+                    .remove_dep_context(plugin.dep_id);
                 // load new plugin
-                let loaded = new_plugin.load_plugin(&self.context, self.api_registry.clone(), true);
+                let new_plugin_context = self.context.give_dep_id(new_plugin.dep_id);
+                let loaded =
+                    new_plugin.load_plugin(&new_plugin_context, self.api_registry.clone(), true);
                 if !loaded {
                     error!("Failed to load plugin when reload: {}", new_plugin);
+                    self.api_registry
+                        .get()
+                        .unwrap()
+                        .remove_dep_context(new_plugin.dep_id);
                 }
                 // replace the old plugin with the new one
                 let old_plugin = std::mem::replace(&mut *plugin, new_plugin);
@@ -733,10 +787,10 @@ impl PluginApi for PluginsRegistry {
                 Some(modified_time != plugin.last_modified)
             })
             .unwrap_or(false);
-        debug!(
-            "check hot reload tick: {}, is_modified: {}",
-            index, is_modified
-        );
+        // debug!(
+        //     "check hot reload tick: {}, is_modified: {}",
+        //     index, is_modified
+        // );
         static WHOLE_RELOAD_TICK: AtomicBool = AtomicBool::new(false);
         // If any plugin was modified, check and reload all modified plugins
         if is_modified && !WHOLE_RELOAD_TICK.load(std::sync::atomic::Ordering::Acquire) {

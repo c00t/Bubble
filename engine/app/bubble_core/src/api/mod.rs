@@ -133,7 +133,7 @@ pub mod plugin_api;
 /// A prelude for users to define or declare their own api and interface.
 pub mod prelude {
     pub use super::api_registry_api::{
-        AnyApiHandle, AnyInterfaceHandle, ApiHandle, ApiRegistryApi, InterfaceHandle,
+        AnyApiHandle, AnyInterfaceHandle, ApiHandle, ApiRegistryApi, DepId, InterfaceHandle,
         LocalApiHandle, LocalInterfaceHandle,
     };
     pub use super::{

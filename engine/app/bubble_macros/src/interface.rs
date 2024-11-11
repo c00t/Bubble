@@ -97,11 +97,11 @@ pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
         let dyn_type_ident = dyn_ident(&last_segment.ident);
         quote! {
             #[doc = #doc_comment]
-            pub fn #register_interface_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>) -> InterfaceHandle<dyn #interface_trait_last_path> {
+            pub fn #register_interface_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>, dep_id: Option<DepId>) -> InterfaceHandle<dyn #interface_trait_last_path> {
                 api_registry_api
                     .get()
                     .expect("Failed to get API registry api")
-                    .local_add_interface::<#dyn_type_ident>(#struct_name::builder().build().into())
+                    .local_add_interface::<#dyn_type_ident>(#struct_name::builder().build().into(), dep_id)
             }
         }
     });

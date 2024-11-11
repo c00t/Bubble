@@ -15,7 +15,7 @@ use core::fmt;
 use std::{
     marker,
     ops::Deref,
-    sync::{OnceLock, RwLock},
+    sync::{Mutex, OnceLock, RwLock},
 };
 
 use super::prelude::*;
@@ -24,6 +24,7 @@ use crate::tracing::{debug, error, info, trace, warn};
 use bon::bon;
 use bubble_macros::{declare_api, define_api};
 use rustc_hash::FxHashMap;
+use sharded_slab::Slab;
 use thiserror::Error;
 
 use super::Api;
@@ -564,7 +565,13 @@ pub trait ApiRegistryApi: Api {
     ///
     /// Currently, it will force overwrite the api if the api with the same name and version already exists.
     /// Whether we need an overwrite enable flag?
-    fn set(&self, name: &'static str, version: Version, api: AnyApiHandle) -> AnyApiHandle;
+    fn set(
+        &self,
+        name: &'static str,
+        version: Version,
+        api: AnyApiHandle,
+        dep_id: Option<DepId>,
+    ) -> AnyApiHandle;
     /// Remove an api with specific name and version.
     ///
     /// It will remove implementation of exact <api,version> pair. No semver checking.
@@ -573,7 +580,12 @@ pub trait ApiRegistryApi: Api {
     ///
     /// Though removed, plugins can still access the api if they have a reference to it.
     /// Return None if the api not found.
-    fn remove(&self, name: &'static str, version: Version) -> Option<AnyApiHandle>;
+    fn remove(
+        &self,
+        name: &'static str,
+        version: Version,
+        dep_id: Option<DepId>,
+    ) -> Option<AnyApiHandle>;
     /// Find an api with specific name and version.
     ///
     /// It uses "compatible" updates checking([`semver::Op::Caret`]) in [`semver::Op`], so:
@@ -584,9 +596,14 @@ pub trait ApiRegistryApi: Api {
     /// It will return a [`Arc`] which points to a null pointer if the api not found,
     /// Be careful, you shouldn't access the api handle when you're inside `load_plugin`,
     /// and you shouldn't access the api handle when the plugin is unloaded.
-    fn find(&self, name: &'static str, version: Version) -> AnyApiHandle;
+    fn find(&self, name: &'static str, version: Version, dep_id: Option<DepId>) -> AnyApiHandle;
     /// Find an api with specific name and version, return None if not found.
-    fn get_optional(&self, name: &'static str, version: Version) -> Option<AnyApiHandle>;
+    fn get_optional(
+        &self,
+        name: &'static str,
+        version: Version,
+        dep_id: Option<DepId>,
+    ) -> Option<AnyApiHandle>;
     /// Clear and shut down the api registry. Currently not implemented.
     ///
     /// ## Note
@@ -611,6 +628,7 @@ pub trait ApiRegistryApi: Api {
         name: &'static str,
         version: Version,
         interface: AnyInterfaceHandle,
+        dep_id: Option<DepId>,
     ) -> AnyInterfaceHandle;
     /// Remove all interfaces with specific instance id from all compatible <name,version> entries.
     ///
@@ -630,7 +648,13 @@ pub trait ApiRegistryApi: Api {
     /// Normally, your will remove interface when the plugin is unloaded(either reloading or shutting down). It's different from [`ApiRegistryApi::remove`],
     /// which is used to remove the specific version of an api.
     ///
-    fn remove_interface(&self, name: &'static str, from_version: Version, instance_id: UniqueId);
+    fn remove_interface(
+        &self,
+        name: &'static str,
+        from_version: Version,
+        instance_id: UniqueId,
+        dep_id: Option<DepId>,
+    );
     /// Get the number of interfaces with specific name and compatible version.
     ///
     /// ## Performance Note
@@ -654,6 +678,12 @@ pub trait ApiRegistryApi: Api {
     ) -> Option<(UniqueId, AnyInterfaceHandle)>;
     /// Get all available versions of an api.
     fn available_api_versions(&self, name: &'static str) -> Vec<Version>;
+    /// Get one new dependency context which is a child of the given parent.
+    fn get_dep_context(&self, name: String, parent: Option<DepId>) -> DepId;
+    /// Remove the dependency context.
+    fn remove_dep_context(&self, dep_id: DepId);
+    /// Record a dependency info to the context.
+    fn record_dep(&self, dep_id: DepId, info: DepInfo);
 }
 
 struct ApiEntry {
@@ -692,6 +722,27 @@ struct ApiRegistry {
     ///
     /// Same as [`inner_apis`], change to lock free hash map. But the size of this hashmap is expected to be larger than [`inner_apis`].
     pub inner_interfaces: RwLock<FxHashMap<VersionedName, Vec<InterfaceEntry>>>,
+    /// Store the DepContext of the plugin
+    pub dep_contexts: Slab<DepContext>,
+}
+
+/// The id of the dependency
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+pub struct DepId(usize);
+
+pub struct DepContext {
+    parent: Option<DepId>,
+    data: Mutex<(String, Vec<DepInfo>)>,
+}
+
+#[derive(Debug, Clone)]
+pub enum DepInfo {
+    SetApi(VersionedName),
+    RemoveApi(VersionedName),
+    AddInterface(VersionedName),
+    RemoveInterface(VersionedName),
+    GetApi(VersionedName),
+    GetOptionalApi(VersionedName),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -740,6 +791,7 @@ impl ApiRegistry {
         Self {
             inner_apis: RwLock::new(FxHashMap::default()),
             inner_interfaces: RwLock::new(FxHashMap::default()),
+            dep_contexts: Slab::new(),
         }
     }
 
@@ -748,6 +800,7 @@ impl ApiRegistry {
         actual_name: &'static str,
         actual_version: Version,
         api: AnyApiHandle,
+        dep_id: Option<DepId>,
     ) -> AnyApiHandle {
         // check that name and version is match, if use fixed size lock free hashmap, may need another size check
         debug_assert!(actual_name == api.name(), "name mismatch");
@@ -805,6 +858,10 @@ impl ApiRegistry {
                 arc.store(api.0.load().as_ref());
             })
             .or_insert(ApiEntry { inner: api });
+        // record the dependency info
+        dep_id.inspect(|dep_id| {
+            self.record_dep(*dep_id, DepInfo::SetApi(id.clone()));
+        });
         raw_entry.inner.clone()
     }
 
@@ -813,6 +870,7 @@ impl ApiRegistry {
         actual_name: &'static str,
         actual_version: Version,
         interface: AnyInterfaceHandle,
+        dep_id: Option<DepId>,
     ) -> AnyInterfaceHandle {
         // check that name and version is match
         debug_assert!(actual_name == interface.name(), "name mismatch");
@@ -856,7 +914,7 @@ impl ApiRegistry {
 
         // Add to the actual version entry
         w_lock
-            .entry(id)
+            .entry(id.clone())
             .and_modify(|entries| {
                 entries.push(InterfaceEntry {
                     inner: interface.clone(),
@@ -867,16 +925,27 @@ impl ApiRegistry {
                     inner: interface.clone(),
                 }]
             });
-
+        // record the dependency info
+        dep_id.inspect(|dep_id| {
+            self.record_dep(*dep_id, DepInfo::AddInterface(id.clone()));
+        });
         interface
     }
 
-    pub fn remove(&self, name: &'static str, version: Version) -> Option<AnyApiHandle> {
+    pub fn remove(
+        &self,
+        name: &'static str,
+        version: Version,
+        dep_id: Option<DepId>,
+    ) -> Option<AnyApiHandle> {
         // only remove the exact <name,version> pair
         let mut w_lock = self.inner_apis.write().unwrap();
         let id = VersionedName::new(name, version);
         info!("Removing Api: {}", id);
         let entry = w_lock.remove(&id).map(|entry| entry.inner);
+        dep_id.inspect(|dep_id| {
+            self.record_dep(*dep_id, DepInfo::RemoveApi(id.clone()));
+        });
         entry
     }
 
@@ -885,6 +954,7 @@ impl ApiRegistry {
         name: &'static str,
         from_version: Version,
         instance_id: UniqueId,
+        dep_id: Option<DepId>,
     ) {
         let mut w_lock = self.inner_interfaces.write().unwrap();
         let id = VersionedName::new(name, from_version.clone());
@@ -932,9 +1002,18 @@ impl ApiRegistry {
                 }
             });
         }
+        // record the dependency info
+        dep_id.inspect(|dep_id| {
+            self.record_dep(*dep_id, DepInfo::RemoveInterface(id.clone()));
+        });
     }
 
-    pub fn get(&self, expected_name: &'static str, expected_version: Version) -> AnyApiHandle {
+    pub fn get(
+        &self,
+        expected_name: &'static str,
+        expected_version: Version,
+        dep_id: Option<DepId>,
+    ) -> AnyApiHandle {
         let id = VersionedName::new(expected_name, expected_version.clone());
         info!("Getting Api: expecting {}", id);
         let r_lock = self.inner_apis.read().unwrap();
@@ -959,7 +1038,10 @@ impl ApiRegistry {
                 },
             )
             .max_by(|a, b| a.version.cmp(&b.version));
-
+        // record the dependency info
+        dep_id.inspect(|dep_id| {
+            self.record_dep(*dep_id, DepInfo::GetApi(id.clone()));
+        });
         if let Some(best_match) = best_match {
             if let Some(raw_entry) = r_lock.get(&best_match) {
                 info!("Found {} while expecting {}", best_match, id);
@@ -981,7 +1063,12 @@ impl ApiRegistry {
         raw_entry.inner.clone()
     }
 
-    fn get_optional(&self, name: &'static str, version: Version) -> Option<AnyApiHandle> {
+    fn get_optional(
+        &self,
+        name: &'static str,
+        version: Version,
+        dep_id: Option<DepId>,
+    ) -> Option<AnyApiHandle> {
         let id = VersionedName::new(name, version.clone());
         info!("Getting Optional Api: expecting {}", id);
         let r_lock = self.inner_apis.read().unwrap();
@@ -1005,7 +1092,10 @@ impl ApiRegistry {
                 },
             )
             .max_by(|a, b| a.version.cmp(&b.version));
-
+        // record the dependency info
+        dep_id.inspect(|dep_id| {
+            self.record_dep(*dep_id, DepInfo::GetApi(id.clone()));
+        });
         // Return the entry if found, otherwise None
         if let Some(best_match) = best_match {
             if let Some(raw_entry) = r_lock.get(&best_match) {
@@ -1187,6 +1277,39 @@ impl ApiRegistry {
         versions
     }
 
+    pub fn get_dep_context(&self, name: String, parent: Option<DepId>) -> DepId {
+        #[cfg(debug_assertions)]
+        DEP_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = self
+            .dep_contexts
+            .insert(DepContext {
+                parent,
+                data: Mutex::new((name, Vec::new())),
+            })
+            .unwrap();
+        DepId(id)
+    }
+
+    pub fn remove_dep_context(&self, dep_id: DepId) {
+        #[cfg(debug_assertions)]
+        DEP_ID_COUNTER.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        self.dep_contexts.remove(dep_id.0);
+    }
+
+    pub fn record_dep(&self, dep_id: DepId, info: DepInfo) {
+        if cfg!(debug_assertions) {
+            debug!(
+                "Recording dep: {:?}, Current Count: {}",
+                info,
+                DEP_ID_COUNTER.load(std::sync::atomic::Ordering::Relaxed)
+            );
+        } else {
+            debug!("Recording dep: {:?}", info);
+        }
+        let ctx = self.dep_contexts.get(dep_id.0).unwrap();
+        ctx.data.lock().unwrap().1.push(info);
+    }
+
     fn shutdown(&self) {
         // for all entry in the hash map, drop the api
         self.inner_apis.write().unwrap().clear();
@@ -1194,21 +1317,41 @@ impl ApiRegistry {
     }
 }
 
+// when debug, print the dep id counter
+#[cfg(debug_assertions)]
+static DEP_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl ApiRegistryApi for ApiRegistry {
-    fn set(&self, name: &'static str, version: Version, api: AnyApiHandle) -> AnyApiHandle {
-        self.set(name, version, api)
+    fn set(
+        &self,
+        name: &'static str,
+        version: Version,
+        api: AnyApiHandle,
+        dep_id: Option<DepId>,
+    ) -> AnyApiHandle {
+        self.set(name, version, api, dep_id)
     }
 
-    fn remove(&self, name: &'static str, version: Version) -> Option<AnyApiHandle> {
-        self.remove(name, version)
+    fn remove(
+        &self,
+        name: &'static str,
+        version: Version,
+        dep_id: Option<DepId>,
+    ) -> Option<AnyApiHandle> {
+        self.remove(name, version, dep_id)
     }
 
-    fn find(&self, name: &'static str, version: Version) -> AnyApiHandle {
-        self.get(name, version)
+    fn find(&self, name: &'static str, version: Version, dep_id: Option<DepId>) -> AnyApiHandle {
+        self.get(name, version, dep_id)
     }
 
-    fn get_optional(&self, name: &'static str, version: Version) -> Option<AnyApiHandle> {
-        self.get_optional(name, version)
+    fn get_optional(
+        &self,
+        name: &'static str,
+        version: Version,
+        dep_id: Option<DepId>,
+    ) -> Option<AnyApiHandle> {
+        self.get_optional(name, version, dep_id)
     }
 
     fn shutdown(&self) {
@@ -1220,8 +1363,9 @@ impl ApiRegistryApi for ApiRegistry {
         name: &'static str,
         version: Version,
         interface: AnyInterfaceHandle,
+        dep_id: Option<DepId>,
     ) -> AnyInterfaceHandle {
-        self.add_interface(name, version, interface)
+        self.add_interface(name, version, interface, dep_id)
     }
 
     fn interface_count(&self, name: &'static str, version: Version) -> Option<usize> {
@@ -1252,25 +1396,52 @@ impl ApiRegistryApi for ApiRegistry {
         self.available_api_versions(name)
     }
 
-    fn remove_interface(&self, name: &'static str, from_version: Version, instance_id: UniqueId) {
-        self.remove_interface(name, from_version, instance_id)
+    fn remove_interface(
+        &self,
+        name: &'static str,
+        from_version: Version,
+        instance_id: UniqueId,
+        dep_id: Option<DepId>,
+    ) {
+        self.remove_interface(name, from_version, instance_id, dep_id)
+    }
+
+    fn get_dep_context(&self, name: String, parent: Option<DepId>) -> DepId {
+        self.get_dep_context(name, parent)
+    }
+
+    fn remove_dep_context(&self, dep_id: DepId) {
+        self.remove_dep_context(dep_id)
+    }
+
+    fn record_dep(&self, dep_id: DepId, info: DepInfo) {
+        self.record_dep(dep_id, info)
     }
 }
 
 /// A typed-decorated api for LocalApiHandle
 impl<'local> LocalApiHandle<'local, dyn ApiRegistryApi> {
-    pub fn local_set<T: ApiConstant + Api + ?Sized>(&self, api: ApiHandle<T>) -> ApiHandle<T> {
-        self.deref().set(T::NAME, T::VERSION, api.inner).downcast()
+    pub fn local_set<T: ApiConstant + Api + ?Sized>(
+        &self,
+        api: ApiHandle<T>,
+        dep_id: Option<DepId>,
+    ) -> ApiHandle<T> {
+        self.deref()
+            .set(T::NAME, T::VERSION, api.inner, dep_id)
+            .downcast()
     }
 
-    pub fn local_remove<T: ApiConstant + Api + ?Sized>(&self) -> Option<ApiHandle<T>> {
+    pub fn local_remove<T: ApiConstant + Api + ?Sized>(
+        &self,
+        dep_id: Option<DepId>,
+    ) -> Option<ApiHandle<T>> {
         self.deref()
-            .remove(T::NAME, T::VERSION)
+            .remove(T::NAME, T::VERSION, dep_id)
             .map(|api| api.downcast())
     }
 
-    pub fn local_find<T: ApiConstant + Api + ?Sized>(&self) -> ApiHandle<T> {
-        self.deref().find(T::NAME, T::VERSION).downcast()
+    pub fn local_find<T: ApiConstant + Api + ?Sized>(&self, dep_id: Option<DepId>) -> ApiHandle<T> {
+        self.deref().find(T::NAME, T::VERSION, dep_id).downcast()
     }
 
     pub fn local_shutdown(&self) {
@@ -1280,9 +1451,10 @@ impl<'local> LocalApiHandle<'local, dyn ApiRegistryApi> {
     pub fn local_add_interface<T: InterfaceConstant + Interface + ?Sized>(
         &self,
         interface: InterfaceHandle<T>,
+        dep_id: Option<DepId>,
     ) -> InterfaceHandle<T> {
         self.deref()
-            .add_interface(T::NAME, T::VERSION, interface.inner)
+            .add_interface(T::NAME, T::VERSION, interface.inner, dep_id)
             .downcast()
     }
 
@@ -1290,9 +1462,10 @@ impl<'local> LocalApiHandle<'local, dyn ApiRegistryApi> {
         &self,
         from_version: Version,
         instance_id: UniqueId,
+        dep_id: Option<DepId>,
     ) {
         self.deref()
-            .remove_interface(T::NAME, from_version, instance_id)
+            .remove_interface(T::NAME, from_version, instance_id, dep_id)
     }
 
     pub fn local_interface_count<T: InterfaceConstant + Interface + ?Sized>(

@@ -70,7 +70,7 @@ pub fn load_plugin(
     let api_registry_api_local = api_registry_api.get().unwrap();
     test_instrument(1);
     // add hot reload test api to it
-    api_registry_api_local.local_set(HotReloadTestApiImpl::builder().build());
+    api_registry_api_local.local_set(HotReloadTestApiImpl::builder().build(), context.dep_id);
     // info!("Loaded hot_reload_plugin({})", is_reload);
     true
 }
@@ -91,7 +91,7 @@ pub fn unload_plugin(
     // if is_reload is true, we don't need to remove the old api before loading the new one
     // because the new one will overwrite the old one, while remove will cause the old api struct to be dropped
     if !is_reload {
-        api_registry_api_local.local_remove::<DynHotReloadTestApi>();
+        api_registry_api_local.local_remove::<DynHotReloadTestApi>(context.dep_id);
     }
     // info!("Unloaded hot_reload_plugin({})", is_reload);
     true

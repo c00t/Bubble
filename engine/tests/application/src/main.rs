@@ -570,12 +570,12 @@ fn main() {
     let x = api_registry_api.get().unwrap();
     // 2. set api
     println!("...");
-    let task_system_api = shared::register_task_system_api(&api_registry_api); // task: strong count 4
-    let plugin_api = bubble_core::api::plugin_api::register_plugin_api(&api_registry_api);
+    let task_system_api = shared::register_task_system_api(&api_registry_api, None); // task: strong count 4
+    let plugin_api = bubble_core::api::plugin_api::register_plugin_api(&api_registry_api, None);
     let hot_reload_test_api = api_registry_api
         .get()
         .unwrap()
-        .local_find::<hot_reload_plugin_types::DynHotReloadTestApi>();
+        .local_find::<hot_reload_plugin_types::DynHotReloadTestApi>(None);
     println!("{:?}", task_system_api);
     println!(
         "num_threads: {}",

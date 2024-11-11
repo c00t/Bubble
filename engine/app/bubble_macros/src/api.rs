@@ -78,11 +78,11 @@ pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
         let local_api_handle = format_ident!("{}Handle", api_trait_last_path);
         quote! {
             #[doc = #doc_comment]
-            pub fn #register_api_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>) -> ApiHandle<#dyn_type_ident> {
+            pub fn #register_api_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>, dep_id: Option<DepId>) -> ApiHandle<#dyn_type_ident> {
                 api_registry_api
                     .get()
                     .expect("Failed to get API registry api")
-                    .local_set::<#dyn_type_ident>(#struct_name::builder().build().into())
+                    .local_set::<#dyn_type_ident>(#struct_name::builder().build().into(), dep_id)
             }
 
             pub struct #local_api_handle<'local> {
