@@ -1,12 +1,9 @@
 //! Customed async runtime for dynamic shared library
+#![feature(ptr_metadata)]
 
 pub use compio::*;
-
-/// The hint for the task system to run the task on the specific thread pool which bind to some specific cores.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AffinityHint {
-    /// The task should be run on the performance core
-    Performance,
-    /// The task should be run on the efficiency core
-    Efficiency,
-}
+pub mod task_system_api;
+pub mod types;
+pub use async_ffi;
+pub use futures_channel;
+pub use futures_util;

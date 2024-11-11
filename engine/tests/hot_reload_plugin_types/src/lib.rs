@@ -2,7 +2,7 @@
 use bubble_core::api::prelude::*;
 
 // First declare the trait
-#[declare_api((0,1,1), hot_reload_plugin::test_api::HotReloadTestApi)]
+#[declare_api((0,1,9), hot_reload_plugin::test_api::HotReloadTestApi)]
 pub trait HotReloadTestApi: Api {
     /// Returns a test string to verify the API is working
     fn get_test_string(&self) -> String;

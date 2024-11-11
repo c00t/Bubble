@@ -7,19 +7,22 @@ use std::{
     time::{Duration, Instant},
 };
 
-use async_ffi::{async_ffi, FutureExt};
 use bubble_core::{
     api::prelude::*,
     os::{thread::dyntls::Context, SysThreadId},
     sync::{Arc, AtomicArc, RefCount},
     tracing::{self, info, instrument, warn},
 };
+use bubble_tasks::futures_util::{self, stream::FuturesUnordered, StreamExt};
+use bubble_tasks::{
+    async_ffi,
+    async_ffi::{async_ffi, FutureExt},
+    types::TaskSystemApi,
+};
 use bubble_tasks::{
     io::{AsyncReadAt, AsyncReadAtExt},
     runtime::Runtime,
 };
-use futures_util::{stream::FuturesUnordered, StreamExt};
-use shared::TaskSystemApi;
 
 // a singleton plugin
 static PLUGIN: OnceLock<AtomicArc<Plugin>> = OnceLock::new();

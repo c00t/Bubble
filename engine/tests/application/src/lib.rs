@@ -2,8 +2,9 @@
 //!
 //! Some Api methods should only be called on the main thread.
 #![feature(ptr_metadata)]
-use bon::bon;
 use bubble_core::api::{prelude::*, Api};
+use bubble_core::bon::bon;
+use bubble_tasks::async_ffi;
 
 #[define_api(ApplicationApi)]
 struct Application {}

@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 use std::{any::TypeId, sync::OnceLock, thread};
 
-use async_ffi::FutureExt;
 use bubble_core::api::prelude::*;
 use bubble_core::sync::RefCount;
 use bubble_core::tracing;
@@ -14,11 +13,17 @@ use bubble_core::{
     tracing::info,
 };
 use bubble_tasks::runtime::Runtime;
+use bubble_tasks::{
+    async_ffi,
+    async_ffi::{async_ffi, FutureExt},
+    futures_channel, futures_util,
+    types::TaskSystemApi,
+};
 use dlopen2::wrapper::{Container, WrapperApi};
 use rand::rngs::ThreadRng;
 use rand::Rng;
 use rand_distr::Distribution;
-use shared::{self as sd, TaskSystemApi, TraitCastableDropSub, TraitCastableDropSuper};
+use shared::{self as sd, TraitCastableDropSub, TraitCastableDropSuper};
 
 #[derive(WrapperApi)]
 pub struct PluginApi {
@@ -570,7 +575,8 @@ fn main() {
     let x = api_registry_api.get().unwrap();
     // 2. set api
     println!("...");
-    let task_system_api = shared::register_task_system_api(&api_registry_api, None); // task: strong count 4
+    let task_system_api =
+        bubble_tasks::task_system_api::register_task_system_api(&api_registry_api, None); // task: strong count 4
     let plugin_api = bubble_core::api::plugin_api::register_plugin_api(&api_registry_api, None);
     let hot_reload_test_api = api_registry_api
         .get()
