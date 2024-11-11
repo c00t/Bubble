@@ -4,9 +4,7 @@
 
 pub mod alloc;
 pub mod api;
-pub mod dll;
 pub mod os;
-pub mod plugin;
 pub mod sync;
 pub use bon;
 pub use tracing;
