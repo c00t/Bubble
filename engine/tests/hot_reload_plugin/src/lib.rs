@@ -1,9 +1,5 @@
 #![feature(ptr_metadata)]
-use bubble_core::api::{
-    plugin_api::{PluginContext, PluginInfo},
-    prelude::*,
-};
-use bubble_core::{api::prelude::*, bon::bon};
+use bubble_core::api::{plugin_api::prelude::*, prelude::*};
 use hot_reload_plugin_types::{DynHotReloadTestApi, HotReloadTestApi};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -57,48 +53,50 @@ impl HotReloadTestApiImpl {
 
 use bubble_core::tracing::{self, info, instrument};
 
-/// we don't care the `is_reload` parameter, so we just ignore it
-#[no_mangle]
-pub fn load_plugin(
-    context: &PluginContext,
-    api_registry_api: ApiHandle<dyn ApiRegistryApi>,
-    _is_reload: bool,
-) -> bool {
-    let Ok(_) = context.load(&api_registry_api) else {
-        return false;
-    };
-    let api_registry_api_local = api_registry_api.get().unwrap();
-    test_instrument(1);
-    // add hot reload test api to it
-    api_registry_api_local.local_set(HotReloadTestApiImpl::builder().build(), context.dep_id);
-    // info!("Loaded hot_reload_plugin({})", is_reload);
-    true
+#[plugin_export]
+pub struct HotReloadPlugin;
+
+impl PluginInstance for HotReloadPlugin {
+    #[inline]
+    fn load_plugin(
+        context: &PluginContext,
+        api_registry: ApiHandle<dyn ApiRegistryApi>,
+        is_reload: bool,
+    ) -> bool {
+        let Ok(_) = context.load(&api_registry) else {
+            return false;
+        };
+        let api_registry_api_local = api_registry.get().unwrap();
+        test_instrument(1);
+        // add hot reload test api to it
+        api_registry_api_local.local_set(HotReloadTestApiImpl::builder().build(), context.dep_id);
+        // info!("Loaded hot_reload_plugin({})", is_reload);
+        true
+    }
+    #[inline]
+    fn unload_plugin(
+        context: &PluginContext,
+        api_registry: ApiHandle<dyn ApiRegistryApi>,
+        is_reload: bool,
+    ) -> bool {
+        let api_registry_api_local = api_registry.get().unwrap();
+        // if is_reload is true, we don't need to remove the old api before loading the new one
+        // because the new one will overwrite the old one, while remove will cause the old api struct to be dropped
+        if !is_reload {
+            api_registry_api_local.local_remove::<DynHotReloadTestApi>(context.dep_id);
+        }
+        // info!("Unloaded hot_reload_plugin({})", is_reload);
+        true
+    }
+    #[inline]
+    fn plugin_info() -> PluginInfo {
+        let info = PluginInfo::new("hot_reload_plugin", Version::new(0, 1, 0));
+        info
+    }
 }
 
 #[instrument]
 pub fn test_instrument(x: i32) {
     // Note: why tracing can get correct thread name here?
     info!("test instrument: {}", x);
-}
-
-#[no_mangle]
-pub fn unload_plugin(
-    context: &PluginContext,
-    api_registry_api: ApiHandle<dyn ApiRegistryApi>,
-    is_reload: bool,
-) -> bool {
-    let api_registry_api_local = api_registry_api.get().unwrap();
-    // if is_reload is true, we don't need to remove the old api before loading the new one
-    // because the new one will overwrite the old one, while remove will cause the old api struct to be dropped
-    if !is_reload {
-        api_registry_api_local.local_remove::<DynHotReloadTestApi>(context.dep_id);
-    }
-    // info!("Unloaded hot_reload_plugin({})", is_reload);
-    true
-}
-
-#[no_mangle]
-pub fn plugin_info() -> PluginInfo {
-    let info = PluginInfo::new("hot_reload_plugin", Version::new(0, 1, 0));
-    info
 }

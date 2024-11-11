@@ -4,12 +4,12 @@ use proc_macro::TokenStream;
 
 mod api;
 mod interface;
+mod plugin_export;
 mod shared;
-mod singleton_derive;
 
-#[proc_macro_derive(Singleton)]
-pub fn derive_singleton(item: TokenStream) -> TokenStream {
-    singleton_derive::derive_singleton(item)
+#[proc_macro_attribute]
+pub fn plugin_export(attr: TokenStream, input: TokenStream) -> TokenStream {
+    plugin_export::plugin_export(attr, input)
 }
 
 /// Defines an API implementation struct and generates necessary boilerplate code.

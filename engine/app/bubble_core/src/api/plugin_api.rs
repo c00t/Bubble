@@ -13,6 +13,14 @@ use super::prelude::*;
 #[allow(unused_imports)]
 use crate::tracing::{debug, error, info, warn};
 
+pub mod prelude {
+    pub use super::{
+        plugin_export, PluginApi, PluginContext, PluginHandle, PluginInfo, PluginInstance,
+    };
+}
+
+pub use bubble_macros::plugin_export;
+
 pub mod constants {
     pub const TARGET_TRIPLE: &str = env!("VERGEN_CARGO_TARGET_TRIPLE");
     pub const HOST_TRIPLE: &str = env!("VERGEN_RUSTC_HOST_TRIPLE");
@@ -75,23 +83,79 @@ impl PluginInfo {
     }
 }
 
-/// The functions that should be exported by a plugin dll
-#[derive(WrapperApi)]
-pub struct PluginExportFns {
-    /// The load plugin function
-    load_plugin: fn(
-        context: &PluginContext,
-        api_registry: ApiHandle<dyn ApiRegistryApi>,
-        is_reload: bool,
-    ) -> bool,
-    /// The unload plugin function
-    unload_plugin: fn(
-        context: &PluginContext,
-        api_registry: ApiHandle<dyn ApiRegistryApi>,
-        is_reload: bool,
-    ) -> bool,
-    /// The plugin info function
-    plugin_info: fn() -> PluginInfo,
+// /// The functions that should be exported by a plugin dll
+// #[derive(WrapperApi)]
+// pub struct PluginExportFns {
+//     /// The load plugin function
+//     load_plugin: fn(
+//         context: &PluginContext,
+//         api_registry: ApiHandle<dyn ApiRegistryApi>,
+//         is_reload: bool,
+//     ) -> bool,
+//     /// The unload plugin function
+//     unload_plugin: fn(
+//         context: &PluginContext,
+//         api_registry: ApiHandle<dyn ApiRegistryApi>,
+//         is_reload: bool,
+//     ) -> bool,
+//     /// The plugin info function
+//     plugin_info: fn() -> PluginInfo,
+// }
+
+/// Macro to generate the PluginInstance trait from PluginExportFns
+macro_rules! generate_plugin_instance_trait {
+    (
+        $(#[$struct_meta:meta])*
+        $struct_vis:vis struct $struct_name:ident {
+            $(
+                $(#[$field_meta:meta])*
+                $field_name:ident: fn($($arg_name:ident: $arg_ty:ty),* $(,)?) -> $ret_ty:ty
+            ),* $(,)?
+        }
+    ) => {
+        $(#[$struct_meta])*
+        $struct_vis struct $struct_name {
+            $(
+                $(#[$field_meta])*
+                $field_name: fn($($arg_name: $arg_ty),*) -> $ret_ty
+            ),*
+        }
+
+        /// This trait is generated according to the [`PluginExportFns`] struct
+        ///
+        /// It will be implemented by the plugin author and generate **pub**,**export**,**no mangle** functions,
+        /// which's names are the same as the fields of the [`PluginExportFns`] struct.
+        ///
+        /// It's recommended to use the [`#[inline]`] attribute for the functions.
+        pub trait PluginInstance {
+            $(
+                $(#[$field_meta])*
+                fn $field_name($($arg_name: $arg_ty),*) -> $ret_ty;
+            )*
+        }
+    }
+}
+
+// Generate the [`PluginInstance`] trait
+generate_plugin_instance_trait! {
+    /// The functions that should be exported by a plugin dll, it will generate the [`PluginInstance`] trait
+    #[derive(WrapperApi)]
+    pub struct PluginExportFns {
+        /// The load plugin function
+        load_plugin: fn(
+            context: &PluginContext,
+            api_registry: ApiHandle<dyn ApiRegistryApi>,
+            is_reload: bool,
+        ) -> bool,
+        /// The unload plugin function
+        unload_plugin: fn(
+            context: &PluginContext,
+            api_registry: ApiHandle<dyn ApiRegistryApi>,
+            is_reload: bool,
+        ) -> bool,
+        /// The plugin info function
+        plugin_info: fn() -> PluginInfo,
+    }
 }
 
 /// A plugin initialization context
