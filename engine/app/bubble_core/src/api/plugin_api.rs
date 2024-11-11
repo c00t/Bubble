@@ -56,7 +56,7 @@ pub struct PluginInfo {
 
 impl fmt::Display for PluginInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}::{}", self.identifier, self.version)
+        write!(f, "{}::[{}]", self.identifier, self.version)
     }
 }
 

@@ -55,16 +55,22 @@ impl<T: 'static + ?Sized + Api> ApiHandle<T> {
     /// add a era counter into [`AnyApiHandle`] when debugging, to indicate whether the api is updated.
     pub fn get<'local>(&'local self) -> Option<LocalApiHandle<'local, T>> {
         self.inner.0.load().map(|guard| LocalApiHandle {
-            _guard: guard,
-            _phantom_type: marker::PhantomData,
-            _api_handle_ref: self,
+            guard,
+            phantom_type: marker::PhantomData,
+            api_handle_ref: self,
         })
     }
 }
 
-impl<T: 'static + ?Sized + Api> std::fmt::Debug for ApiHandle<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ApiHandle").field(">", &self.inner).finish()
+impl<T: 'static + ?Sized + Api> fmt::Debug for ApiHandle<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ApiHandle").field("", &self.inner).finish()
+    }
+}
+
+impl<T: 'static + ?Sized + Api> fmt::Display for ApiHandle<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.inner)
     }
 }
 
@@ -96,18 +102,24 @@ pub struct InterfaceHandle<T: 'static + ?Sized + Interface> {
 impl<T: 'static + ?Sized + Interface> InterfaceHandle<T> {
     pub fn get<'local>(&'local self) -> Option<LocalInterfaceHandle<'local, T>> {
         self.inner.0.load().map(|guard| LocalInterfaceHandle {
-            _guard: guard,
-            _phantom_type: marker::PhantomData,
-            _api_handle_ref: self,
+            guard,
+            phantom_type: marker::PhantomData,
+            api_handle_ref: self,
         })
     }
 }
 
-impl<T: 'static + ?Sized + Interface> std::fmt::Debug for InterfaceHandle<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<T: 'static + ?Sized + Interface> fmt::Debug for InterfaceHandle<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("InterfaceHandle")
-            .field(">", &self.inner)
+            .field("", &self.inner)
             .finish()
+    }
+}
+
+impl<T: 'static + ?Sized + Interface> fmt::Display for InterfaceHandle<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.inner)
     }
 }
 
@@ -141,16 +153,17 @@ impl<T: 'static + ?Sized + Interface> RefCount for InterfaceHandle<T> {
 ///
 /// You don't need to remember their differences, [`ApiHandle`] implement [`Send`] and [`Sync`], while [`LocalApiHandle`] doesn't.
 pub struct LocalApiHandle<'local, T: 'static + ?Sized + Api> {
-    // a guard that pervent the api from being dropped
-    _guard: Guard<Box<dyn TraitcastableAny + 'static + Sync + Send>>,
-    _api_handle_ref: &'local ApiHandle<T>,
-    _phantom_type: marker::PhantomData<&'local T>,
+    /// A guard that pervent the api from being dropped.
+    guard: Guard<Box<dyn TraitcastableAny + 'static + Sync + Send>>,
+    /// Used to cast back to [`ApiHandle`], when use [`circ`], this field can be ommited.
+    api_handle_ref: &'local ApiHandle<T>,
+    phantom_type: marker::PhantomData<&'local T>,
 }
 
-impl<'local, T: 'static + ?Sized + Api> std::fmt::Debug for LocalApiHandle<'local, T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<'local, T: 'static + ?Sized + Api> fmt::Debug for LocalApiHandle<'local, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Some((name, version)) = self
-            ._guard
+            .guard
             .as_ref()
             .downcast_ref()
             .and_then(|box_api: &dyn Api| Some((box_api.name(), box_api.version())))
@@ -160,9 +173,23 @@ impl<'local, T: 'static + ?Sized + Api> std::fmt::Debug for LocalApiHandle<'loca
         f.debug_struct("LocalApiHandle")
             .field("name", &name)
             .field("version", &version)
-            .field("strong_count", &self._guard.strong_count())
-            .field("weak_count", &self._guard.weak_count())
+            .field("strong_count", &self.guard.strong_count())
+            .field("weak_count", &self.guard.weak_count())
             .finish()
+    }
+}
+
+impl<T: 'static + ?Sized + Api> fmt::Display for LocalApiHandle<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Some((name, version)) = self
+            .guard
+            .as_ref()
+            .downcast_ref()
+            .and_then(|box_api: &dyn Api| Some((box_api.name(), box_api.version())))
+        else {
+            return write!(f, "Invalid LocalApiHandle");
+        };
+        write!(f, "{}::{}", name, version)
     }
 }
 
@@ -174,7 +201,7 @@ impl<T: 'static + ?Sized + Api> RefCount for LocalApiHandle<'_, T> {
     /// Typically, strong count of [`LocalApiHandle`] won't equal to the strong count of the
     /// [`ApiHandle`] that be generated from.
     fn strong_count(&self) -> usize {
-        self._guard.strong_count()
+        self.guard.strong_count()
     }
 
     /// Return a weak count of the [`AtomicArc`] object
@@ -184,7 +211,7 @@ impl<T: 'static + ?Sized + Api> RefCount for LocalApiHandle<'_, T> {
     /// Typically, weak count of [`LocalApiHandle`] won't equal to the weak count of the
     /// [`ApiHandle`] that be generated from.
     fn weak_count(&self) -> usize {
-        self._guard.weak_count()
+        self.guard.weak_count()
     }
 }
 
@@ -193,7 +220,7 @@ where
     dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
 {
     fn from(value: LocalApiHandle<T>) -> Self {
-        value._api_handle_ref.clone()
+        value.api_handle_ref.clone()
     }
 }
 
@@ -202,7 +229,7 @@ where
     dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
 {
     fn from(value: &LocalApiHandle<T>) -> Self {
-        value._api_handle_ref.clone()
+        value.api_handle_ref.clone()
     }
 }
 
@@ -223,7 +250,7 @@ where
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self._guard
+        self.guard
             .as_ref()
             .downcast_ref()
             .expect("Invalid LocalApiHandle")
@@ -232,15 +259,15 @@ where
 
 pub struct LocalInterfaceHandle<'local, T: 'static + ?Sized + Interface> {
     // a guard that pervent the api from being dropped
-    _guard: Guard<Box<dyn TraitcastableAny + 'static + Sync + Send>>,
-    _api_handle_ref: &'local InterfaceHandle<T>,
-    _phantom_type: marker::PhantomData<&'local T>,
+    guard: Guard<Box<dyn TraitcastableAny + 'static + Sync + Send>>,
+    api_handle_ref: &'local InterfaceHandle<T>,
+    phantom_type: marker::PhantomData<&'local T>,
 }
 
 impl<'local, T: 'static + ?Sized + Interface> std::fmt::Debug for LocalInterfaceHandle<'local, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Some((name, version)) = self
-            ._guard
+            .guard
             .as_ref()
             .downcast_ref()
             .and_then(|box_api: &dyn Api| Some((box_api.name(), box_api.version())))
@@ -250,9 +277,23 @@ impl<'local, T: 'static + ?Sized + Interface> std::fmt::Debug for LocalInterface
         f.debug_struct("LocalInterfaceHandle")
             .field("name", &name)
             .field("version", &version)
-            .field("strong_count", &self._guard.strong_count())
-            .field("weak_count", &self._guard.weak_count())
+            .field("strong_count", &self.guard.strong_count())
+            .field("weak_count", &self.guard.weak_count())
             .finish()
+    }
+}
+
+impl<T: 'static + ?Sized + Interface> fmt::Display for LocalInterfaceHandle<'_, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Some((name, version)) = self
+            .guard
+            .as_ref()
+            .downcast_ref()
+            .and_then(|box_api: &dyn Interface| Some((box_api.name(), box_api.version())))
+        else {
+            return write!(f, "Invalid LocalInterfaceHandle");
+        };
+        write!(f, "{}::{}", name, version)
     }
 }
 
@@ -264,7 +305,7 @@ impl<T: 'static + ?Sized + Interface> RefCount for LocalInterfaceHandle<'_, T> {
     /// Typically, strong count of [`LocalApiHandle`] won't equal to the strong count of the
     /// [`ApiHandle`] that be generated from.
     fn strong_count(&self) -> usize {
-        self._guard.strong_count()
+        self.guard.strong_count()
     }
 
     /// Return a weak count of the [`AtomicArc`] object
@@ -274,7 +315,7 @@ impl<T: 'static + ?Sized + Interface> RefCount for LocalInterfaceHandle<'_, T> {
     /// Typically, weak count of [`LocalApiHandle`] won't equal to the weak count of the
     /// [`ApiHandle`] that be generated from.
     fn weak_count(&self) -> usize {
-        self._guard.weak_count()
+        self.guard.weak_count()
     }
 }
 
@@ -283,7 +324,7 @@ where
     dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
 {
     fn from(value: LocalInterfaceHandle<T>) -> Self {
-        value._api_handle_ref.clone()
+        value.api_handle_ref.clone()
     }
 }
 
@@ -292,7 +333,7 @@ where
     dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
 {
     fn from(value: &LocalInterfaceHandle<T>) -> Self {
-        value._api_handle_ref.clone()
+        value.api_handle_ref.clone()
     }
 }
 
@@ -314,7 +355,7 @@ where
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self._guard.as_ref().downcast_ref().unwrap()
+        self.guard.as_ref().downcast_ref().unwrap()
     }
 }
 
@@ -368,19 +409,18 @@ impl Api for AnyApiHandle {
 
 impl std::fmt::Debug for AnyApiHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Some((name, version)) = self.0.load().and_then(|guard| {
-            let trait_cast_any = guard.as_ref();
-            let box_api: &dyn Api = trait_cast_any.downcast_ref()?;
-            Some((box_api.name(), box_api.version()))
-        }) else {
-            return f.debug_struct("Invalid AnyApiHandle").finish();
-        };
         f.debug_struct("AnyApiHandle")
-            .field("name", &name)
-            .field("version", &version)
+            .field("name", &self.name())
+            .field("version", &self.version())
             .field("strong_count", &self.0.strong_count())
             .field("weak_count", &self.0.weak_count())
             .finish()
+    }
+}
+
+impl fmt::Display for AnyApiHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}::{}", self.name(), self.version())
     }
 }
 
@@ -455,19 +495,19 @@ impl Interface for AnyInterfaceHandle {
 
 impl std::fmt::Debug for AnyInterfaceHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Some((name, version)) = self.0.load().and_then(|guard| {
-            let trait_cast_any = guard.as_ref();
-            let box_api: &dyn Api = trait_cast_any.downcast_ref()?;
-            Some((box_api.name(), box_api.version()))
-        }) else {
-            return f.debug_struct("Invalid AnyInterfaceHandle").finish();
-        };
         f.debug_struct("AnyInterfaceHandle")
-            .field("name", &name)
-            .field("version", &version)
+            .field("name", &self.name())
+            .field("version", &self.version())
+            .field("instance_id", &self.id())
             .field("strong_count", &self.0.strong_count())
             .field("weak_count", &self.0.weak_count())
             .finish()
+    }
+}
+
+impl fmt::Display for AnyInterfaceHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}::{}::{}", self.name(), self.version(), self.id())
     }
 }
 
