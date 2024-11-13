@@ -10,7 +10,7 @@ use std::{
 use bubble_core::{
     api::prelude::*,
     os::{thread::dyntls::Context, SysThreadId},
-    sync::{Arc, AtomicArc, RefCount},
+    sync::circ,
     tracing::{self, info, instrument, warn},
 };
 use bubble_tasks::futures_util::{self, stream::FuturesUnordered, StreamExt};
@@ -24,11 +24,31 @@ use bubble_tasks::{
     runtime::Runtime,
 };
 
-// a singleton plugin
-static PLUGIN: OnceLock<AtomicArc<Plugin>> = OnceLock::new();
+// A singleton plugin, or use Mutex to protect the global plugin.
+//
+// The sync primitive you use should be compatible with your expected use case.
+static PLUGIN: OnceLock<circ::AtomicRc<Plugin>> = OnceLock::new();
+
+fn task_api(guard: &circ::Guard) -> LocalApiHandle<'_, dyn TaskSystemApi> {
+    PLUGIN
+        .get()
+        .unwrap()
+        .load(std::sync::atomic::Ordering::Relaxed, &guard)
+        .as_ref()
+        .unwrap()
+        .task_api
+        .get(&guard)
+        .unwrap()
+}
 
 struct Plugin {
     task_api: ApiHandle<dyn TaskSystemApi>,
+}
+
+unsafe impl circ::RcObject for Plugin {
+    fn pop_edges(&mut self, out: &mut Vec<circ::Rc<Self>>) {
+        // no edges
+    }
 }
 
 #[no_mangle]
@@ -70,7 +90,8 @@ pub fn load_plugin(context: &Context, api_registry_api: ApiHandle<dyn ApiRegistr
     unsafe {
         context.initialize();
     }
-    let api_guard = api_registry_api.get().unwrap();
+    let guard = circ::cs();
+    let api_guard = api_registry_api.get(&guard).unwrap();
 
     let task_system_api = api_guard.local_find::<dyn TaskSystemApi>(None);
 
@@ -79,13 +100,8 @@ pub fn load_plugin(context: &Context, api_registry_api: ApiHandle<dyn ApiRegistr
     // let task_guard = apis.get().unwrap();
     // println!("{:p}", task_guard.deref());
 
-    println!(
-        "task_system_api.stront_count({})(at load_plugin)",
-        task_system_api.strong_count()
-    );
-
     PLUGIN.get_or_init(|| {
-        AtomicArc::new(Plugin {
+        circ::AtomicRc::new(Plugin {
             task_api: task_system_api,
         })
     });
@@ -94,20 +110,15 @@ pub fn load_plugin(context: &Context, api_registry_api: ApiHandle<dyn ApiRegistr
 #[no_mangle]
 pub fn unload_plugin() {
     // clear plugin data
-    PLUGIN.get().unwrap().store::<Arc<_>>(None);
+    // PLUGIN.get().unwrap().store::<Arc<_>>(None);
 }
 
 #[async_ffi(?Send)]
 #[instrument]
 #[no_mangle]
 async fn plugin_task(s: String) -> String {
-    let plugin = PLUGIN.get().unwrap().load().unwrap();
-    let task_system_api = plugin.task_api.get().unwrap();
-    // it's 1 or 2 depends on the order of `set` or `get` of api_registry_api
-    println!(
-        "task_guard.strong_count()(at plugin_task begin), should be 1 or 2: {}",
-        task_system_api.strong_count()
-    );
+    let guard = circ::cs();
+    let task_system_api = task_api(&guard);
     // get static value
     // let x = api::TEST_INT.get().unwrap();
     // println!("plugin_task: {:?}", x);
@@ -158,19 +169,12 @@ async fn plugin_task(s: String) -> String {
     let x = task_system_api.spawn_detached(x);
 
     let task_system_global_api: ApiHandle<_> = (&task_system_api).into();
-    println!(
-        "task_system_api_arc.strong_count()(before dispatch): {}",
-        task_system_global_api.strong_count()
-    );
     let x = task_system_api.spawn(
         async move {
             let mut handles = FuturesUnordered::new();
             let global_api = task_system_global_api;
-            println!(
-                "global_api.strong_count()(at dispatch begin): {}",
-                global_api.strong_count()
-            );
-            let task_system_api = global_api.get().unwrap();
+            let guard = circ::cs();
+            let task_system_api = global_api.get(&guard).unwrap();
             for i in 0..2 {
                 handles.push(
                     task_system_api

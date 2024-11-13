@@ -4,6 +4,7 @@
 #![feature(ptr_metadata)]
 use bubble_core::api::{prelude::*, Api};
 use bubble_core::bon::bon;
+use bubble_core::sync::circ;
 use bubble_tasks::async_ffi;
 
 #[define_api(ApplicationApi)]

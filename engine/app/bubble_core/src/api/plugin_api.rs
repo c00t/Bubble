@@ -217,8 +217,9 @@ impl PluginContext {
         unsafe {
             self.dyntls_context.initialize();
         }
+        let guard = circ::cs();
         // check the api registry api version compatibility
-        let api_handle = api_handle.get().unwrap();
+        let api_handle = api_handle.get(&guard).unwrap();
         let actual_version = api_handle.version();
         // check against the version declared in the crate itself, use semver methods
         let request_version = crate::api::api_registry_api::api_registry_api_constants::VERSION;
@@ -396,13 +397,14 @@ impl Plugin {
         let name = get_plugin_name_from_path(path);
 
         // Get last modified time
+        let guard = circ::cs();
         let last_modified = std::fs::metadata(path)?
             .modified()?
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
         let dep_id = api_registry
-            .get()
+            .get(&guard)
             .unwrap()
             .get_dep_context(name.clone(), None);
         let plugin = Plugin {
@@ -689,9 +691,10 @@ impl PluginApi for PluginsRegistry {
         let plugin_context = self.context.give_dep_id(plugin.dep_id);
         let loaded = plugin.load_plugin(&plugin_context, self.api_registry.clone(), false);
         if !loaded {
+            let guard = circ::cs();
             error!("Failed to load plugin: {}", plugin);
             self.api_registry
-                .get()
+                .get(&guard)
                 .unwrap()
                 .remove_dep_context(plugin.dep_id);
             return None;
@@ -730,8 +733,9 @@ impl PluginApi for PluginsRegistry {
         if !unloaded {
             error!("Failed to unload plugin: {}", plugin);
         }
+        let guard = circ::cs();
         self.api_registry
-            .get()
+            .get(&guard)
             .unwrap()
             .remove_dep_context(plugin.dep_id);
         // remove the handle from the plugins handles
@@ -768,8 +772,9 @@ impl PluginApi for PluginsRegistry {
                 if !unloaded {
                     error!("Failed to unload plugin when reload: {}", plugin);
                 }
+                let guard = circ::cs();
                 self.api_registry
-                    .get()
+                    .get(&guard)
                     .unwrap()
                     .remove_dep_context(plugin.dep_id);
                 // load new plugin
@@ -779,7 +784,7 @@ impl PluginApi for PluginsRegistry {
                 if !loaded {
                     error!("Failed to load plugin when reload: {}", new_plugin);
                     self.api_registry
-                        .get()
+                        .get(&guard)
                         .unwrap()
                         .remove_dep_context(new_plugin.dep_id);
                 }

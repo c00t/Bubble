@@ -145,4 +145,5 @@ pub mod prelude {
         TraitcastableAnyInfraExt, TraitcastableTo, UniqueId, UniqueTypeId, Version,
     };
     pub use crate::bon::{bon, builder};
+    pub use crate::sync::circ;
 }

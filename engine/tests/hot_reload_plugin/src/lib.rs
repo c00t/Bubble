@@ -1,5 +1,6 @@
 #![feature(ptr_metadata)]
 use bubble_core::api::{plugin_api::prelude::*, prelude::*};
+use bubble_core::sync::circ;
 use hot_reload_plugin_types::{DynHotReloadTestApi, HotReloadTestApi};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -66,7 +67,8 @@ impl PluginInstance for HotReloadPlugin {
         let Ok(_) = context.load(&api_registry) else {
             return false;
         };
-        let api_registry_api_local = api_registry.get().unwrap();
+        let guard = circ::cs();
+        let api_registry_api_local = api_registry.get(&guard).unwrap();
         test_instrument(1);
         // add hot reload test api to it
         api_registry_api_local.local_set(HotReloadTestApiImpl::builder().build(), context.dep_id);
@@ -79,7 +81,8 @@ impl PluginInstance for HotReloadPlugin {
         api_registry: ApiHandle<dyn ApiRegistryApi>,
         is_reload: bool,
     ) -> bool {
-        let api_registry_api_local = api_registry.get().unwrap();
+        let guard = circ::cs();
+        let api_registry_api_local = api_registry.get(&guard).unwrap();
         // if is_reload is true, we don't need to remove the old api before loading the new one
         // because the new one will overwrite the old one, while remove will cause the old api struct to be dropped
         if !is_reload {

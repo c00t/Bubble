@@ -98,8 +98,9 @@ pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {
             #[doc = #doc_comment]
             pub fn #register_interface_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>, dep_id: Option<DepId>) -> InterfaceHandle<dyn #interface_trait_last_path> {
+                let guard = circ::cs();
                 api_registry_api
-                    .get()
+                    .get(&guard)
                     .expect("Failed to get API registry api")
                     .local_add_interface::<#dyn_type_ident>(#struct_name::builder().build().into(), dep_id)
             }

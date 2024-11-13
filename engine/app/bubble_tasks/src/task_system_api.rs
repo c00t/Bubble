@@ -1,4 +1,6 @@
 use std::num::NonZero;
+use std::ops::Deref;
+use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
 use std::time::Duration;
 
 use crate::dispatcher::Dispatcher;
@@ -7,8 +9,8 @@ use crate::types::{
     AffinityHint, CalcellationId, CancellableTicket, DynTaskSystemApi, TaskSystemApi,
 };
 use async_ffi::FutureExt;
-use bubble_core::sync::AsPtr;
-use bubble_core::{api::prelude::*, sync::AtomicArc};
+use bubble_core::tracing::info;
+use bubble_core::{api::prelude::*, sync::circ};
 use hwlocality::cpu::binding::CpuBindingFlags;
 use hwlocality::cpu::cpuset::CpuSet;
 use hwlocality::cpu::kind::CpuEfficiency;
@@ -20,10 +22,31 @@ struct MainRuntime(crate::runtime::Runtime);
 unsafe impl Send for MainRuntime {}
 unsafe impl Sync for MainRuntime {}
 
+struct RwLockDiapatcher(std::sync::RwLock<Option<Dispatcher>>);
+
+impl RwLockDiapatcher {
+    pub fn new(dispatcher: Dispatcher) -> Self {
+        Self(std::sync::RwLock::new(Some(dispatcher)))
+    }
+}
+
+unsafe impl circ::RcObject for RwLockDiapatcher {
+    fn pop_edges(&mut self, out: &mut Vec<circ::Rc<Self>>) {
+        // no need to track edges
+    }
+}
+
+impl Deref for RwLockDiapatcher {
+    type Target = std::sync::RwLock<Option<Dispatcher>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 #[define_api(TaskSystemApi)]
 struct TaskSystem {
-    pub performance_dispatcher: AtomicArc<std::sync::RwLock<Option<Dispatcher>>>,
-    pub efficiency_dispatcher: Option<AtomicArc<std::sync::RwLock<Option<Dispatcher>>>>,
+    pub performance_dispatcher: circ::AtomicRc<RwLockDiapatcher>,
+    pub efficiency_dispatcher: Option<circ::AtomicRc<RwLockDiapatcher>>,
     pub tick_sender: thingbuf::mpsc::blocking::Sender<bool>,
     pub tick_reader: thingbuf::mpsc::blocking::Receiver<bool>,
     /// a timeout value which wait before tick to next frame.
@@ -155,11 +178,9 @@ pub fn get_task_system_api(
             .unwrap(),
     );
     let task_system_api: AnyApiHandle = Box::new(TaskSystem {
-        performance_dispatcher: AtomicArc::new(std::sync::RwLock::new(Some(
-            performance_dispatcher,
-        ))),
+        performance_dispatcher: circ::AtomicRc::new(RwLockDiapatcher::new(performance_dispatcher)),
         efficiency_dispatcher: if let Some(e_dispatcher) = efficiency_dispatcher {
-            Some(AtomicArc::new(std::sync::RwLock::new(Some(e_dispatcher))))
+            Some(circ::AtomicRc::new(RwLockDiapatcher::new(e_dispatcher)))
         } else {
             None
         },
@@ -243,11 +264,11 @@ impl TaskSystem {
                 .unwrap(),
         );
         let task_system_api: AnyApiHandle = Box::new(TaskSystem {
-            performance_dispatcher: AtomicArc::new(std::sync::RwLock::new(Some(
+            performance_dispatcher: circ::AtomicRc::new(RwLockDiapatcher::new(
                 performance_dispatcher,
-            ))),
+            )),
             efficiency_dispatcher: if let Some(e_dispatcher) = efficiency_dispatcher {
-                Some(AtomicArc::new(std::sync::RwLock::new(Some(e_dispatcher))))
+                Some(circ::AtomicRc::new(RwLockDiapatcher::new(e_dispatcher)))
             } else {
                 None
             },
@@ -264,9 +285,7 @@ impl TaskSystem {
     }
 
     fn get_next_calcellation_id(&self) -> CalcellationId {
-        let id = self
-            .next_calcellation_id
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = self.next_calcellation_id.fetch_add(1, Relaxed);
         CalcellationId(id)
     }
 
@@ -312,13 +331,15 @@ impl TaskSystemApi for TaskSystem {
         affinity_hint: Option<AffinityHint>,
         fut: async_ffi::FfiFuture<()>,
     ) -> Result<oneshot::Receiver<()>, ()> {
+        let guard = circ::cs();
         if affinity_hint.is_none()
             || self.efficiency_dispatcher.is_none()
             || affinity_hint == Some(AffinityHint::Performance)
         {
             let result = self
                 .performance_dispatcher
-                .load()
+                .load(Relaxed, &guard)
+                .as_ref()
                 .unwrap()
                 .read()
                 .expect("Can't get the read lock on performance dispatcher")
@@ -332,7 +353,8 @@ impl TaskSystemApi for TaskSystem {
                 .efficiency_dispatcher
                 .as_ref()
                 .unwrap()
-                .load()
+                .load(Relaxed, &guard)
+                .as_ref()
                 .unwrap()
                 .read()
                 .expect("Can't get the read lock on efficiency dispatcher")
@@ -349,13 +371,15 @@ impl TaskSystemApi for TaskSystem {
         affinity_hint: Option<AffinityHint>,
         func: Box<dyn FnOnce() -> () + Send + 'static>,
     ) -> Result<oneshot::Receiver<()>, ()> {
+        let guard = circ::cs();
         if affinity_hint.is_none()
             || self.efficiency_dispatcher.is_none()
             || affinity_hint == Some(AffinityHint::Performance)
         {
             let result = self
                 .performance_dispatcher
-                .load()
+                .load(Relaxed, &guard)
+                .as_ref()
                 .unwrap()
                 .read()
                 .unwrap()
@@ -369,7 +393,8 @@ impl TaskSystemApi for TaskSystem {
                 .efficiency_dispatcher
                 .as_ref()
                 .unwrap()
-                .load()
+                .load(Relaxed, &guard)
+                .as_ref()
                 .unwrap()
                 .read()
                 .unwrap()
@@ -383,38 +408,37 @@ impl TaskSystemApi for TaskSystem {
 
     fn shutdown(&self) {
         // Shutdown performance dispatcher
-        let mut p_dispatcher = self.performance_dispatcher.load();
-        let null_arc = bubble_core::sync::Arc::new(std::sync::RwLock::new(None));
+        let guard = circ::cs();
 
-        // Exchange performance dispatcher with None
+        let mut p_dispatcher_snapshot = self.performance_dispatcher.load(Acquire, &guard);
         loop {
-            let dispatcher_ptr = p_dispatcher
-                .as_ref()
-                .map_or(std::ptr::null(), AsPtr::as_ptr);
-            match self
-                .performance_dispatcher
-                .compare_exchange(dispatcher_ptr, Some(&null_arc))
-            {
-                Ok(()) => break,
-                Err(before) => p_dispatcher = before,
+            match self.performance_dispatcher.compare_exchange(
+                p_dispatcher_snapshot,
+                circ::Rc::null(),
+                AcqRel,
+                AcqRel,
+                &guard,
+            ) {
+                Ok(_) => break,
+                Err(err) => p_dispatcher_snapshot = err.current,
             }
         }
 
         // Shutdown efficiency dispatcher if it exists
-        let mut e_dispatcher = self.efficiency_dispatcher.as_ref().map(|d| d.load());
-        if let Some(ref mut e_dispatcher) = e_dispatcher {
+        let mut e_dispatcher_snapshot = self
+            .efficiency_dispatcher
+            .as_ref()
+            .map(|d| d.load(Acquire, &guard));
+        if let Some(ref mut e_dispatcher) = e_dispatcher_snapshot {
             loop {
-                let dispatcher_ptr = e_dispatcher
-                    .as_ref()
-                    .map_or(std::ptr::null(), AsPtr::as_ptr);
                 match self
                     .efficiency_dispatcher
                     .as_ref()
                     .unwrap()
-                    .compare_exchange(dispatcher_ptr, Some(&null_arc))
+                    .compare_exchange(*e_dispatcher, circ::Rc::null(), AcqRel, AcqRel, &guard)
                 {
-                    Ok(()) => break,
-                    Err(before) => *e_dispatcher = before,
+                    Ok(_) => break,
+                    Err(err) => *e_dispatcher = err.current,
                 }
             }
         }
@@ -423,18 +447,21 @@ impl TaskSystemApi for TaskSystem {
         let runtime = crate::runtime::Runtime::new().unwrap();
 
         // Join performance dispatcher
-        if let Some(dispatcher) = p_dispatcher {
-            println!("shutting down performance dispatcher");
+        p_dispatcher_snapshot.as_ref().map(|dispatcher| {
+            info!("shutting down performance dispatcher");
             let x = dispatcher.write().unwrap().take().unwrap();
             let _ = runtime.block_on(async move { x.join().await });
-        }
+        });
 
         // Join efficiency dispatcher
-        if let Some(dispatcher) = e_dispatcher.flatten() {
-            println!("shutting down efficiency dispatcher");
-            let x = dispatcher.write().unwrap().take().unwrap();
-            let _ = runtime.block_on(async move { x.join().await });
-        }
+        e_dispatcher_snapshot
+            .as_ref()
+            .and_then(|dispatcher| dispatcher.as_ref())
+            .map(|dispatcher| {
+                info!("shutting down efficiency dispatcher");
+                let x = dispatcher.write().unwrap().take().unwrap();
+                let _ = runtime.block_on(async move { x.join().await });
+            });
     }
 
     unsafe fn tick(&self, tick_task: async_ffi::LocalFfiFuture<bool>) -> bool {

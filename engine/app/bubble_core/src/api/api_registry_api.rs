@@ -15,7 +15,10 @@ use core::fmt;
 use std::{
     marker,
     ops::Deref,
-    sync::{Mutex, OnceLock, RwLock},
+    sync::{
+        atomic::Ordering::{Relaxed, Release, SeqCst},
+        Mutex, OnceLock, RwLock,
+    },
 };
 
 use super::prelude::*;
@@ -28,10 +31,31 @@ use sharded_slab::Slab;
 use thiserror::Error;
 
 use super::Api;
-use crate::sync::{Arc, AsPtr, AtomicArc, Guard, RefCount, Weak};
 
-type HandleInternal<T> = Arc<AtomicArc<Box<T>>>;
-type WeakHandleInternal<T> = Weak<AtomicArc<Box<T>>>;
+use crate::sync::{
+    circ::{AtomicRc, AtomicWeak, Guard, Rc, Snapshot, Weak},
+    NoLinkWrap,
+};
+
+type Boxed<T> = NoLinkWrap<Box<T>>;
+impl<T: ?Sized> Boxed<T> {
+    fn new(boxed: Box<T>) -> Self {
+        Self(boxed)
+    }
+}
+
+type AtomicInner<T> = NoLinkWrap<AtomicRc<NoLinkWrap<Box<T>>>>;
+impl<T: ?Sized> AtomicInner<T> {
+    fn new(boxed: Box<T>) -> Self {
+        Self(AtomicRc::new(Boxed::new(boxed)))
+    }
+    fn null() -> Self {
+        Self(AtomicRc::null())
+    }
+}
+
+type HandleInternal<T> = Rc<AtomicInner<T>>;
+type WeakHandleInternal<T> = Weak<AtomicInner<T>>;
 
 /// A plugin(or future) global type-aware handle to an API.
 ///
@@ -54,9 +78,10 @@ impl<T: 'static + ?Sized + Api> ApiHandle<T> {
     /// ## TODO
     ///
     /// add a era counter into [`AnyApiHandle`] when debugging, to indicate whether the api is updated.
-    pub fn get<'local>(&'local self) -> Option<LocalApiHandle<'local, T>> {
-        self.inner.0.load().map(|guard| LocalApiHandle {
-            guard,
+    pub fn get<'local>(&'local self, guard: &'local Guard) -> Option<LocalApiHandle<'local, T>> {
+        let snapshot = self.inner.0.as_ref()?.load(Relaxed, guard);
+        Some(LocalApiHandle {
+            snapshot,
             phantom_type: marker::PhantomData,
             api_handle_ref: self,
         })
@@ -84,26 +109,19 @@ impl<T: 'static + ?Sized + Api> Clone for ApiHandle<T> {
     }
 }
 
-impl<T: 'static + ?Sized + Api> RefCount for ApiHandle<T> {
-    /// Get the strong count of the underlying [`Arc`].
-    fn strong_count(&self) -> usize {
-        self.inner.0.strong_count()
-    }
-    /// Get the weak count of the underlying [`Arc`].
-    fn weak_count(&self) -> usize {
-        self.inner.0.weak_count()
-    }
-}
-
 pub struct InterfaceHandle<T: 'static + ?Sized + Interface> {
     inner: AnyInterfaceHandle,
     _phantom_type: marker::PhantomData<HandleInternal<T>>,
 }
 
 impl<T: 'static + ?Sized + Interface> InterfaceHandle<T> {
-    pub fn get<'local>(&'local self) -> Option<LocalInterfaceHandle<'local, T>> {
-        self.inner.0.load().map(|guard| LocalInterfaceHandle {
-            guard,
+    pub fn get<'local>(
+        &'local self,
+        guard: &'local Guard,
+    ) -> Option<LocalInterfaceHandle<'local, T>> {
+        let snapshot = self.inner.0.as_ref()?.load(Relaxed, guard);
+        Some(LocalInterfaceHandle {
+            snapshot,
             phantom_type: marker::PhantomData,
             api_handle_ref: self,
         })
@@ -133,17 +151,6 @@ impl<T: 'static + ?Sized + Interface> Clone for InterfaceHandle<T> {
     }
 }
 
-impl<T: 'static + ?Sized + Interface> RefCount for InterfaceHandle<T> {
-    /// Get the strong count of the underlying [`Arc`].
-    fn strong_count(&self) -> usize {
-        self.inner.0.strong_count()
-    }
-    /// Get the weak count of the underlying [`Arc`].
-    fn weak_count(&self) -> usize {
-        self.inner.0.weak_count()
-    }
-}
-
 /// A function local type-aware handle to an API.
 ///
 /// Usually get from [`ApiHandle`] by [`ApiHandle::get`]. It avoid overhead of ref count
@@ -155,7 +162,7 @@ impl<T: 'static + ?Sized + Interface> RefCount for InterfaceHandle<T> {
 /// You don't need to remember their differences, [`ApiHandle`] implement [`Send`] and [`Sync`], while [`LocalApiHandle`] doesn't.
 pub struct LocalApiHandle<'local, T: 'static + ?Sized + Api> {
     /// A guard that pervent the api from being dropped.
-    guard: Guard<Box<dyn TraitcastableAny + 'static + Sync + Send>>,
+    snapshot: Snapshot<'local, Boxed<dyn TraitcastableAny + 'static + Sync + Send>>,
     /// Used to cast back to [`ApiHandle`], when use [`circ`], this field can be ommited.
     api_handle_ref: &'local ApiHandle<T>,
     phantom_type: marker::PhantomData<&'local T>,
@@ -164,9 +171,9 @@ pub struct LocalApiHandle<'local, T: 'static + ?Sized + Api> {
 impl<'local, T: 'static + ?Sized + Api> fmt::Debug for LocalApiHandle<'local, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Some((name, version)) = self
-            .guard
+            .snapshot
             .as_ref()
-            .downcast_ref()
+            .and_then(|boxed| boxed.downcast_ref())
             .and_then(|box_api: &dyn Api| Some((box_api.name(), box_api.version())))
         else {
             return f.debug_struct("Invalid LocalApiHandle").finish();
@@ -174,8 +181,6 @@ impl<'local, T: 'static + ?Sized + Api> fmt::Debug for LocalApiHandle<'local, T>
         f.debug_struct("LocalApiHandle")
             .field("name", &name)
             .field("version", &version)
-            .field("strong_count", &self.guard.strong_count())
-            .field("weak_count", &self.guard.weak_count())
             .finish()
     }
 }
@@ -183,9 +188,9 @@ impl<'local, T: 'static + ?Sized + Api> fmt::Debug for LocalApiHandle<'local, T>
 impl<T: 'static + ?Sized + Api> fmt::Display for LocalApiHandle<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Some((name, version)) = self
-            .guard
+            .snapshot
             .as_ref()
-            .downcast_ref()
+            .and_then(|boxed| boxed.downcast_ref())
             .and_then(|box_api: &dyn Api| Some((box_api.name(), box_api.version())))
         else {
             return write!(f, "Invalid LocalApiHandle");
@@ -194,33 +199,12 @@ impl<T: 'static + ?Sized + Api> fmt::Display for LocalApiHandle<'_, T> {
     }
 }
 
-impl<T: 'static + ?Sized + Api> RefCount for LocalApiHandle<'_, T> {
-    /// Return a strong count of the [`AtomicArc`] object
-    ///
-    /// ## Note
-    ///
-    /// Typically, strong count of [`LocalApiHandle`] won't equal to the strong count of the
-    /// [`ApiHandle`] that be generated from.
-    fn strong_count(&self) -> usize {
-        self.guard.strong_count()
-    }
-
-    /// Return a weak count of the [`AtomicArc`] object
-    ///
-    /// ## Note
-    ///
-    /// Typically, weak count of [`LocalApiHandle`] won't equal to the weak count of the
-    /// [`ApiHandle`] that be generated from.
-    fn weak_count(&self) -> usize {
-        self.guard.weak_count()
-    }
-}
-
 impl<T: 'static + ?Sized + Api> From<LocalApiHandle<'_, T>> for ApiHandle<T>
 where
     dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
 {
     fn from(value: LocalApiHandle<T>) -> Self {
+        // Note: we clone the api handle, it's the outermost layer of the handle, ie the `Rc` layer.
         value.api_handle_ref.clone()
     }
 }
@@ -234,16 +218,6 @@ where
     }
 }
 
-impl<'local, T: 'static + ?Sized + Api> From<&'local ApiHandle<T>> for LocalApiHandle<'local, T>
-where
-    dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
-{
-    fn from(value: &'local ApiHandle<T>) -> Self {
-        // it shouldn't fail (with same version of compiler toolchain), the type infomation was encoded in the generic
-        value.get().unwrap()
-    }
-}
-
 impl<T: 'static + ?Sized + Api> Deref for LocalApiHandle<'_, T>
 where
     dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
@@ -251,16 +225,17 @@ where
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.guard
+        self.snapshot
             .as_ref()
-            .downcast_ref()
-            .expect("Invalid LocalApiHandle")
+            .and_then(|boxed| boxed.downcast_ref())
+            .expect("Invalid LocalApiHandle: snapshot is null")
     }
 }
 
 pub struct LocalInterfaceHandle<'local, T: 'static + ?Sized + Interface> {
-    // a guard that pervent the api from being dropped
-    guard: Guard<Box<dyn TraitcastableAny + 'static + Sync + Send>>,
+    /// A guard that pervent the api from being dropped
+    snapshot: Snapshot<'local, Boxed<dyn TraitcastableAny + 'static + Sync + Send>>,
+    /// Used to cast back to [`InterfaceHandle`]
     api_handle_ref: &'local InterfaceHandle<T>,
     phantom_type: marker::PhantomData<&'local T>,
 }
@@ -268,18 +243,16 @@ pub struct LocalInterfaceHandle<'local, T: 'static + ?Sized + Interface> {
 impl<'local, T: 'static + ?Sized + Interface> std::fmt::Debug for LocalInterfaceHandle<'local, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Some((name, version)) = self
-            .guard
+            .snapshot
             .as_ref()
-            .downcast_ref()
-            .and_then(|box_api: &dyn Api| Some((box_api.name(), box_api.version())))
+            .and_then(|boxed| boxed.downcast_ref())
+            .and_then(|box_api: &dyn Interface| Some((box_api.name(), box_api.version())))
         else {
             return f.debug_struct("Invalid LocalInterfaceHandle").finish();
         };
         f.debug_struct("LocalInterfaceHandle")
             .field("name", &name)
             .field("version", &version)
-            .field("strong_count", &self.guard.strong_count())
-            .field("weak_count", &self.guard.weak_count())
             .finish()
     }
 }
@@ -287,9 +260,9 @@ impl<'local, T: 'static + ?Sized + Interface> std::fmt::Debug for LocalInterface
 impl<T: 'static + ?Sized + Interface> fmt::Display for LocalInterfaceHandle<'_, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Some((name, version)) = self
-            .guard
+            .snapshot
             .as_ref()
-            .downcast_ref()
+            .and_then(|boxed| boxed.downcast_ref())
             .and_then(|box_api: &dyn Interface| Some((box_api.name(), box_api.version())))
         else {
             return write!(f, "Invalid LocalInterfaceHandle");
@@ -298,33 +271,12 @@ impl<T: 'static + ?Sized + Interface> fmt::Display for LocalInterfaceHandle<'_, 
     }
 }
 
-impl<T: 'static + ?Sized + Interface> RefCount for LocalInterfaceHandle<'_, T> {
-    /// Return a strong count of the [`AtomicArc`] object
-    ///
-    /// ## Note
-    ///
-    /// Typically, strong count of [`LocalApiHandle`] won't equal to the strong count of the
-    /// [`ApiHandle`] that be generated from.
-    fn strong_count(&self) -> usize {
-        self.guard.strong_count()
-    }
-
-    /// Return a weak count of the [`AtomicArc`] object
-    ///
-    /// ## Note
-    ///
-    /// Typically, weak count of [`LocalApiHandle`] won't equal to the weak count of the
-    /// [`ApiHandle`] that be generated from.
-    fn weak_count(&self) -> usize {
-        self.guard.weak_count()
-    }
-}
-
 impl<T: 'static + ?Sized + Interface> From<LocalInterfaceHandle<'_, T>> for InterfaceHandle<T>
 where
     dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
 {
     fn from(value: LocalInterfaceHandle<T>) -> Self {
+        // Note: we clone the api handle, it's the outermost layer of the handle, ie the `Rc` layer.
         value.api_handle_ref.clone()
     }
 }
@@ -338,17 +290,6 @@ where
     }
 }
 
-impl<'local, T: 'static + ?Sized + Interface> From<&'local InterfaceHandle<T>>
-    for LocalInterfaceHandle<'local, T>
-where
-    dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
-{
-    fn from(value: &'local InterfaceHandle<T>) -> Self {
-        // it shouldn't fail (with same version of compiler toolchain), the type infomation was encoded in the generic
-        value.get().unwrap()
-    }
-}
-
 impl<T: 'static + ?Sized + Interface> Deref for LocalInterfaceHandle<'_, T>
 where
     dyn trait_cast_rs::TraitcastableAny + Sync + Send: trait_cast_rs::TraitcastableAnyInfra<T>,
@@ -356,7 +297,10 @@ where
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.guard.as_ref().downcast_ref().unwrap()
+        self.snapshot
+            .as_ref()
+            .and_then(|boxed| boxed.downcast_ref())
+            .expect("Invalid LocalInterfaceHandle: snapshot is null")
     }
 }
 
@@ -386,22 +330,24 @@ impl AnyApiHandle {
 
 impl Api for AnyApiHandle {
     fn name(&self) -> &'static str {
-        self.0
-            .load()
-            .and_then(|guard| {
-                let trait_cast_any = guard.as_ref();
-                let box_api: &dyn Api = trait_cast_any.downcast_ref()?;
+        let guard = circ::cs();
+        let snapshot = self.0.as_ref().unwrap().load(Relaxed, &guard);
+        snapshot
+            .as_ref()
+            .and_then(|boxed| {
+                let box_api: &dyn Api = boxed.downcast_ref()?;
                 Some(box_api.name())
             })
             .expect("Invalid AnyApiHandle")
     }
 
     fn version(&self) -> Version {
-        self.0
-            .load()
-            .and_then(|guard| {
-                let trait_cast_any = guard.as_ref();
-                let box_api: &dyn Api = trait_cast_any.downcast_ref()?;
+        let guard = circ::cs();
+        let snapshot = self.0.as_ref().unwrap().load(Relaxed, &guard);
+        snapshot
+            .as_ref()
+            .and_then(|boxed| {
+                let box_api: &dyn Api = boxed.downcast_ref()?;
                 Some(box_api.version())
             })
             .expect("Invalid AnyApiHandle")
@@ -413,8 +359,6 @@ impl std::fmt::Debug for AnyApiHandle {
         f.debug_struct("AnyApiHandle")
             .field("name", &self.name())
             .field("version", &self.version())
-            .field("strong_count", &self.0.strong_count())
-            .field("weak_count", &self.0.weak_count())
             .finish()
     }
 }
@@ -437,7 +381,7 @@ where
 {
     fn from(value: Box<T>) -> Self {
         let boxed_any: Box<dyn TraitcastableAny + Sync + Send> = value;
-        AnyApiHandle(Arc::new(AtomicArc::new(boxed_any)))
+        AnyApiHandle(Rc::new(AtomicInner::new(boxed_any)))
     }
 }
 
@@ -461,33 +405,36 @@ impl AnyInterfaceHandle {
 
 impl Interface for AnyInterfaceHandle {
     fn name(&self) -> &'static str {
-        self.0
-            .load()
-            .and_then(|guard| {
-                let trait_cast_any = guard.as_ref();
-                let box_api: &dyn Interface = trait_cast_any.downcast_ref()?;
+        let guard = circ::cs();
+        let snapshot = self.0.as_ref().unwrap().load(Relaxed, &guard);
+        snapshot
+            .as_ref()
+            .and_then(|boxed| {
+                let box_api: &dyn Interface = boxed.downcast_ref()?;
                 Some(box_api.name())
             })
             .expect("Invalid AnyInterfaceHandle")
     }
 
     fn version(&self) -> Version {
-        self.0
-            .load()
-            .and_then(|guard| {
-                let trait_cast_any = guard.as_ref();
-                let box_api: &dyn Interface = trait_cast_any.downcast_ref()?;
+        let guard = circ::cs();
+        let snapshot = self.0.as_ref().unwrap().load(Relaxed, &guard);
+        snapshot
+            .as_ref()
+            .and_then(|boxed| {
+                let box_api: &dyn Interface = boxed.downcast_ref()?;
                 Some(box_api.version())
             })
             .expect("Invalid AnyInterfaceHandle")
     }
 
     fn id(&self) -> UniqueId {
-        self.0
-            .load()
-            .and_then(|guard| {
-                let trait_cast_any = guard.as_ref();
-                let box_api: &dyn Interface = trait_cast_any.downcast_ref()?;
+        let guard = circ::cs();
+        let snapshot = self.0.as_ref().unwrap().load(Relaxed, &guard);
+        snapshot
+            .as_ref()
+            .and_then(|boxed| {
+                let box_api: &dyn Interface = boxed.downcast_ref()?;
                 Some(box_api.id())
             })
             .expect("Invalid AnyInterfaceHandle")
@@ -500,8 +447,6 @@ impl std::fmt::Debug for AnyInterfaceHandle {
             .field("name", &self.name())
             .field("version", &self.version())
             .field("instance_id", &self.id())
-            .field("strong_count", &self.0.strong_count())
-            .field("weak_count", &self.0.weak_count())
             .finish()
     }
 }
@@ -524,7 +469,7 @@ where
 {
     fn from(value: Box<T>) -> Self {
         let boxed_any: Box<dyn TraitcastableAny + Sync + Send> = value;
-        AnyInterfaceHandle(Arc::new(AtomicArc::new(boxed_any)))
+        AnyInterfaceHandle(Rc::new(AtomicInner::new(boxed_any)))
     }
 }
 
@@ -536,7 +481,7 @@ impl<T: 'static + ?Sized + Interface> From<InterfaceHandle<T>> for AnyInterfaceH
 
 #[derive(Error, Debug)]
 pub enum ApiError {
-    #[error("Null entry inside api registry, which usually means you're accessing this api after")]
+    #[error("Null entry inside api registry")]
     NullEntry(String),
 }
 
@@ -731,7 +676,7 @@ struct ApiRegistry {
 pub struct DepId(usize);
 
 pub struct DepContext {
-    parent: Option<DepId>,
+    pub parent: Option<DepId>,
     data: Mutex<(String, Vec<DepInfo>)>,
 }
 
@@ -843,7 +788,16 @@ impl ApiRegistry {
             w_lock.entry(match_id.clone()).and_modify(|entry| {
                 info!("Overwriting: {}", match_id);
                 let arc = &entry.inner.0;
-                arc.store(api.0.load().as_ref());
+                let guard = circ::cs();
+                let atomic_rc = &arc.as_ref().unwrap().0;
+                let new_rc = api
+                    .0
+                    .as_ref()
+                    .expect("The api you passed in should not be null")
+                    .load(Relaxed, &guard)
+                    .counted();
+                // Note: should we use Release here?
+                atomic_rc.store(new_rc, SeqCst, &guard);
             });
         }
 
@@ -855,7 +809,16 @@ impl ApiRegistry {
                 // TODO: if we don't use RWLock in ApiRegistry, we should use compare_exchange
                 info!("Overwriting: {}", id);
                 let arc = &entry.inner.0;
-                arc.store(api.0.load().as_ref());
+                let guard = circ::cs();
+                let atomic_rc = &arc.as_ref().unwrap().0;
+                let new_rc = api
+                    .0
+                    .as_ref()
+                    .expect("The api you passed in should not be null")
+                    .load(Relaxed, &guard)
+                    .counted();
+                // Note: should we use Release here?
+                atomic_rc.store(new_rc, SeqCst, &guard);
             })
             .or_insert(ApiEntry { inner: api });
         // record the dependency info
@@ -986,13 +949,13 @@ impl ApiRegistry {
             info!("Removing from compatible version entry: {}", compatible_id);
             w_lock.entry(compatible_id).and_modify(|entries| {
                 let pos = entries.iter_mut().position(|entry| {
-                    entry
-                        .inner
-                        .0
-                        .load()
-                        .and_then(|guard| {
-                            let trait_cast_any = guard.as_ref();
-                            let box_interface: &dyn Interface = trait_cast_any.downcast_ref()?;
+                    let guard = circ::cs();
+                    let atomic_rc = entry.inner.0.as_ref().unwrap();
+                    atomic_rc
+                        .load(Relaxed, &guard)
+                        .as_ref()
+                        .and_then(|boxed| {
+                            let box_interface: &dyn Interface = boxed.downcast_ref()?;
                             Some(box_interface.id() == instance_id)
                         })
                         .unwrap_or(false)
@@ -1055,7 +1018,10 @@ impl ApiRegistry {
         let mut w_lock = self.inner_apis.write().unwrap();
 
         let raw_entry = w_lock.entry(id).or_insert_with(|| {
-            let new_arc_to_null = Arc::new(AtomicArc::new(None));
+            // Note: we create the Rc and corresponding AtomicInner(point to null) here,
+            // and the AtomicInner will be updated by other threads when the api is set.
+            // It's important for `let atomic_rc = &arc.as_ref().unwrap().0;` in [`set`]
+            let new_arc_to_null = Rc::new(AtomicInner::null());
             ApiEntry {
                 inner: AnyApiHandle(new_arc_to_null),
             }
@@ -1153,9 +1119,9 @@ impl ApiRegistry {
         // Remove duplicates by instance ID
         let mut unique_entries = Vec::new();
         let mut seen_ids = std::collections::HashSet::new();
-
+        let guard = circ::cs();
         for handle in compatible_entries {
-            if let Some(local_handle) = handle.clone().downcast::<dyn Interface>().get() {
+            if let Some(local_handle) = handle.clone().downcast::<dyn Interface>().get(&guard) {
                 let instance_id = local_handle.id();
                 if seen_ids.insert(instance_id) {
                     unique_entries.push(handle);
@@ -1243,9 +1209,9 @@ impl ApiRegistry {
         // Track unique instances by ID
         let mut unique_entry = None;
         let mut seen_ids = std::collections::HashSet::new();
-
+        let guard = circ::cs();
         for handle in compatible_entries {
-            if let Some(local_handle) = handle.clone().downcast::<dyn Interface>().get() {
+            if let Some(local_handle) = handle.clone().downcast::<dyn Interface>().get(&guard) {
                 let instance_id = local_handle.id();
                 if !seen_ids.insert(instance_id) {
                     // Found duplicate ID
@@ -1279,7 +1245,7 @@ impl ApiRegistry {
 
     pub fn get_dep_context(&self, name: String, parent: Option<DepId>) -> DepId {
         #[cfg(debug_assertions)]
-        DEP_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        DEP_ID_COUNTER.fetch_add(1, Relaxed);
         let id = self
             .dep_contexts
             .insert(DepContext {
@@ -1292,7 +1258,7 @@ impl ApiRegistry {
 
     pub fn remove_dep_context(&self, dep_id: DepId) {
         #[cfg(debug_assertions)]
-        DEP_ID_COUNTER.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        DEP_ID_COUNTER.fetch_sub(1, Relaxed);
         self.dep_contexts.remove(dep_id.0);
     }
 
@@ -1554,7 +1520,7 @@ impl<T: 'static + ?Sized + Api> ApiHandle<T> {
 impl AnyApiHandle {
     /// Creates a new weak handle to this API
     pub fn downgrade(&self) -> WeakAnyApiHandle {
-        WeakAnyApiHandle(Arc::downgrade(&self.0))
+        WeakAnyApiHandle(Rc::downgrade(&self.0))
     }
 }
 
