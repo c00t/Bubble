@@ -317,10 +317,11 @@ fn main() {
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App::default();
+    let task_system_api_clone = task_system_api.clone();
     let tick_thread = thread::Builder::new()
         .name("Tick Thread".to_string())
         .spawn(move || {
-            let task_system = task_system_api.clone();
+            let task_system = task_system_api_clone;
             let guard = circ::cs();
             let task_api = task_system.get(&guard).unwrap();
             while unsafe {
@@ -356,6 +357,13 @@ fn main() {
     let _ = event_loop.run_app(&mut app);
 
     let _ = tick_thread.join();
+    let guard = circ::cs();
+    task_system_api.get(&guard).map(|local| {
+        local.shutdown();
+    });
+    api_registry_api.get(&guard).map(|local| {
+        local.local_shutdown();
+    });
 }
 
 use winit::application::ApplicationHandler;
