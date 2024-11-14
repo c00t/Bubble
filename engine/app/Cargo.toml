@@ -1,5 +1,17 @@
 [workspace]
-members = ["bubble", "bubble_alloc", "bubble_core", "bubble_log", "bubble_macros", "bubble_wand", "bubble_tasks", "dyntls", "bubble_renderer", "dyntls_host"]
+members = [
+    "bubble",
+    "bubble_alloc",
+    "bubble_core",
+    "bubble_log",
+    "bubble_macros",
+    "bubble_wand",
+    "bubble_tasks",
+    "dyntls",
+    "bubble_renderer",
+    "dyntls_host",
+    "circ_ds",
+]
 resolver = "2"
 
 [workspace.dependencies]

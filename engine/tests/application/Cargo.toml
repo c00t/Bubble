@@ -4,13 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bubble-core = {path = "../../app/bubble_core", default-features = false}
+bubble-core = { path = "../../app/bubble_core", default-features = false }
 dlopen2 = "0.7.0"
-shared = {workspace = true}
-bubble-tasks = {workspace = true}
+shared = { workspace = true }
+bubble-tasks = { workspace = true }
 winit = "0.30.5"
 rand = "=0.9.0-alpha.2"
 rand_distr = "=0.5.0-alpha.2"
 # tracing-subscriber = { path = "../../third-party/vendor/tracing/tracing-subscriber", features = ["registry", "env-filter"] }
-bubble-log = { path = "../../app/bubble_log", features = ["panic-hook", "tracy"]}
-hot_reload_plugin_types = {path = "../hot_reload_plugin_types"}
+bubble-log = { path = "../../app/bubble_log", features = [
+    "panic-hook",
+    "tracy",
+] }
+hot_reload_plugin_types = { path = "../hot_reload_plugin_types" }

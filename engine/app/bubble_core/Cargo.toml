@@ -4,24 +4,26 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-async-ffi = { path = "../../third-party/vendor/async-ffi", features = ["macros"] }
+async-ffi = { path = "../../third-party/vendor/async-ffi", features = [
+    "macros",
+] }
 dlopen2 = "0.7.0"
 gettid = "0.1.3"
 rustc-hash = "2.0.0"
 semver = "1.0.23"
-dyntls = { path = "../dyntls"}
-dyntls-host = { path = "../dyntls_host"}
+dyntls = { path = "../dyntls" }
+dyntls-host = { path = "../dyntls_host" }
 circ = { path = "../../third-party/vendor/circ"}
-trait_cast_rs = { path = "../../third-party/vendor/trait_cast_rs/trait_cast_rs"}
+trait_cast_rs = { path = "../../third-party/vendor/trait_cast_rs/trait_cast_rs" }
 bubble-macros = { workspace = true }
 anyhow = "1.0.90"
 thiserror = "1.0.64"
 bon = "2.3.0"
-tracing = { path = "../../third-party/vendor/tracing/tracing"}
-sharded-slab = { path = "../../third-party/vendor/sharded-slab"}
+tracing = { path = "../../third-party/vendor/tracing/tracing" }
+sharded-slab = { path = "../../third-party/vendor/sharded-slab" }
 
 [dev-dependencies]
-dyntls-host = { path = "../dyntls_host"}
+dyntls-host = { path = "../dyntls_host" }
 tempfile = "*"
 
 [build-dependencies]

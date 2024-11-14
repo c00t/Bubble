@@ -18,10 +18,10 @@ mimalloc-rust = "0.2.1"
 tracy-client = { path = "../../third-party/vendor/rust_tracy_client/tracy-client", optional = true }
 
 [profile.release]
-strip = true  # Automatically strip symbols from the binary.
+strip = true      # Automatically strip symbols from the binary.
 lto = true
 codegen-units = 1
-panic = "abort" # This library will always be a dynamic library.
+panic = "abort"   # This library will always be a dynamic library.
 
 [features]
 default = ["system"]

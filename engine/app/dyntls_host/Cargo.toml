@@ -6,3 +6,9 @@ edition = "2021"
 [dependencies]
 dyntls = { path = "../dyntls" }
 abi_stable = "0.11.3"
+# don't use circ-ds, because that will result in recursive calls,
+# but we don't want to introduce another unfamiliar dependency,
+# so introduce the standard circ crate, which don't compatible with dynamic linking,
+# and copy the data structures from circ_ds into this crate
+circ = "0.2.0"
+bitflags = "2.6.0"

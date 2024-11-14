@@ -11,12 +11,18 @@ repository = "https://github.com/c00t/Bubble"
 edition = "2021"
 
 [dependencies]
-compio = { path = "../../third-party/vendor/compio/compio", features = ["dispatcher","time","process","signal"]}
-async-ffi = { path = "../../third-party/vendor/async-ffi", features = ["macros"] }
+compio = { path = "../../third-party/vendor/compio/compio", features = [
+    "dispatcher",
+    "time",
+    "process",
+    "signal",
+] }
+async-ffi = { path = "../../third-party/vendor/async-ffi", features = [
+    "macros",
+] }
 bon = "2.3.0"
-bubble-core = {path = "../../app/bubble_core", default-features = false}
+bubble-core = { path = "../../app/bubble_core", default-features = false }
 futures-channel = "0.3.31"
 thingbuf = "0.1.6"
 futures-util = "0.3.31"
-hwlocality = {version = "1.0.0-alpha.6", features = ["hwloc-2_4_0"]}
-
+hwlocality = { version = "1.0.0-alpha.6", features = ["hwloc-2_4_0"] }

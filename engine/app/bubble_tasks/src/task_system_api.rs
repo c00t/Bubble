@@ -416,7 +416,7 @@ impl TaskSystemApi for TaskSystem {
                 p_dispatcher_snapshot,
                 circ::Rc::null(),
                 AcqRel,
-                AcqRel,
+                Acquire,
                 &guard,
             ) {
                 Ok(_) => break,

@@ -1,0 +1,18 @@
+[package]
+name = "circ-ds"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bitflags = "2.6.0"
+circ = { path = "../../third-party/vendor/circ" }
+crossbeam-utils = { path = "../../third-party/vendor/crossbeam/crossbeam-utils"}
+dyntls = { path = "../dyntls" }
+rand = "0.8.5"
+
+[dev-dependencies]
+dyntls-host = { path = "../dyntls_host"}
+tracing = "0.1.40"
+tracing-subscriber = {version = "0.3.18", features = ["registry", "env-filter"] }
+tracing-tracy = "0.11.3"
+tracy-client = "0.17.4"
