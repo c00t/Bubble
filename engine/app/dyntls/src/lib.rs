@@ -452,6 +452,10 @@ pub struct Context {
     pub statics: AccessFunction,
 }
 
+unsafe extern "C" fn dummy_context(_: &RStr<'static>, _: extern "C" fn() -> RBox<()>) -> *const () {
+    std::ptr::null()
+}
+
 impl Context {
     /// Initialize the thread local storage and static storage.
     ///
@@ -461,6 +465,13 @@ impl Context {
     pub unsafe fn initialize(&self) {
         HOST_TLS = Some(self.tls);
         HOST_STATICS = Some(self.statics);
+    }
+
+    pub unsafe fn null() -> Self {
+        Self {
+            tls: dummy_context,
+            statics: dummy_context,
+        }
     }
 }
 

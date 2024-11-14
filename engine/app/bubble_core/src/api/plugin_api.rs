@@ -187,7 +187,16 @@ impl PluginContext {
     /// It should be called in main executable.
     pub fn new() -> Self {
         Self {
-            dyntls_context: os::thread::dyntls_context::get(),
+            dyntls_context: {
+                #[cfg(feature = "host")]
+                {
+                    os::thread::dyntls_context::get()
+                }
+                #[cfg(not(feature = "host"))]
+                {
+                    unsafe { os::thread::dyntls::Context::null() }
+                }
+            },
             dep_id: None,
         }
     }
