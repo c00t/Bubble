@@ -11,6 +11,7 @@ members = [
     "bubble_renderer",
     "dyntls_host",
     "circ_ds",
+    "bubble_basin",
 ]
 resolver = "2"
 
