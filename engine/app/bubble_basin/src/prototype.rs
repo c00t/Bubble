@@ -549,7 +549,7 @@ pub mod rkyv_bilrost_prototype {
 
         #[test]
         fn test_combined_serialization() {
-            // Test rkyv serialization, use it for
+            // Test rkyv serialization, use it for local storage, typically no buffers on disks(textures, audio, materials, etc.)
             let example010 = Example::builder()
                 .a(1)
                 .b(2)
@@ -600,7 +600,8 @@ pub mod rkyv_bilrost_prototype {
             assert_eq!(view_010_as_020.0.b, 2);
             // assert_eq!(view_010_as_020.0.c, Some("hello".to_string()));
 
-            // bilrost tests
+            // bilrost tests, use it for sync of basin storage between clients
+            // it's a bit slower than rkyv, but more stable, suitable for network communication
             let bilrost_bytes010 = example010.encode_to_vec();
             let bilrost_bytes020 = example020.encode_to_vec();
 
