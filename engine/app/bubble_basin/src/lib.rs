@@ -8,4 +8,4 @@
 //! only use Basin for data exchange with other systems**.
 //!
 
-mod prototype;
+pub mod prototype;
