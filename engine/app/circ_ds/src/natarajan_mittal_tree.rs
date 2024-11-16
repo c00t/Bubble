@@ -3,6 +3,7 @@ use circ::{AtomicRc, Guard, Rc, RcObject, Snapshot};
 use super::concurrent_map::{ConcurrentMap, OutputHolder};
 use bitflags::bitflags;
 use std::cmp;
+use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 
 bitflags! {
@@ -514,6 +515,159 @@ where
             }
         }
     }
+
+    /// Iterator that may not be sound, only for testing
+    pub fn iter<'g>(&'g self, order: IterOrder, guard: &'g Guard) -> Iter<'g, K, V>
+    where
+        K: std::fmt::Debug,
+    {
+        Iter::new(self, order, guard)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum IterOrder {
+    Ascending,
+    Descending,
+}
+
+pub struct Iter<'g, K, V> {
+    tree: &'g NMTreeMap<K, V>,
+    // Track path during traversal
+    path: VecDeque<Snapshot<'g, Node<K, V>>>,
+    // Current position
+    current: Option<Snapshot<'g, Node<K, V>>>,
+    // Iteration order
+    order: IterOrder,
+    // Guard for memory safety
+    guard: &'g Guard,
+}
+
+impl<'g, K, V> Iterator for Iter<'g, K, V>
+where
+    K: Ord + Clone + std::fmt::Debug,
+    V: Clone,
+{
+    type Item = (&'g K, &'g V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // Get next valid node
+            let node = self.advance()?;
+
+            // Skip internal nodes and infinity sentinel nodes
+            if let Some(node_ref) = node.as_ref() {
+                match &node_ref.key {
+                    Key::Fin(k) if node_ref.value.is_some() => {
+                        self.current = Some(node);
+                        return Some((k, node_ref.value.as_ref().unwrap()));
+                    }
+                    _ => continue,
+                }
+            } else {
+                self.path.clear();
+                self.current = None;
+                return None;
+            }
+        }
+    }
+}
+
+impl<'g, K, V> Iter<'g, K, V>
+where
+    K: Ord + Clone + std::fmt::Debug,
+    V: Clone,
+{
+    fn new(tree: &'g NMTreeMap<K, V>, order: IterOrder, guard: &'g Guard) -> Self {
+        let mut iter = Self {
+            tree,
+            path: VecDeque::new(),
+            current: None,
+            order,
+            guard,
+        };
+
+        // Initialize position based on order
+        iter.init();
+        iter
+    }
+
+    fn init(&mut self) {
+        let root = self.tree.r.load(Ordering::Acquire, self.guard);
+        self.path.push_back(root);
+
+        // Traverse to leftmost/rightmost leaf based on order
+        while let Some(curr) = self.path.back() {
+            let node = unsafe { curr.deref() };
+
+            let next = match self.order {
+                IterOrder::Ascending => node.left.load(Ordering::Acquire, self.guard),
+                IterOrder::Descending => node.right.load(Ordering::Acquire, self.guard),
+            };
+
+            if next.is_null() {
+                break;
+            }
+
+            self.path.push_back(next.with_tag(Marks::empty().bits()));
+        }
+    }
+
+    fn advance(&mut self) -> Option<Snapshot<'g, Node<K, V>>> {
+        if self.path.is_empty() {
+            return None;
+        }
+
+        let curr = self.path.pop_back()?;
+        let node = unsafe { curr.deref() };
+
+        match self.order {
+            IterOrder::Ascending => {
+                // Try moving right
+                let right = node.right.load(Ordering::Acquire, self.guard);
+                if !right.is_null() {
+                    // Only push the right node, don't keep curr
+                    let right = right.with_tag(Marks::empty().bits());
+                    self.path.push_back(right);
+
+                    // Go to leftmost from the right node
+                    let mut current = right;
+                    while let Some(curr_node) = current.as_ref() {
+                        let left = curr_node.left.load(Ordering::Acquire, self.guard);
+                        if left.is_null() {
+                            break;
+                        }
+                        let left = left.with_tag(Marks::empty().bits());
+                        self.path.push_back(left);
+                        current = left;
+                    }
+                }
+            }
+            IterOrder::Descending => {
+                // Try moving left
+                let left = node.left.load(Ordering::Acquire, self.guard);
+                if !left.is_null() {
+                    // Only push the left node, don't keep curr
+                    let left = left.with_tag(Marks::empty().bits());
+                    self.path.push_back(left);
+
+                    // Go to rightmost from the left node
+                    let mut current = left;
+                    while let Some(curr_node) = current.as_ref() {
+                        let right = curr_node.right.load(Ordering::Acquire, self.guard);
+                        if right.is_null() {
+                            break;
+                        }
+                        let right = right.with_tag(Marks::empty().bits());
+                        self.path.push_back(right);
+                        current = right;
+                    }
+                }
+            }
+        }
+
+        Some(curr)
+    }
 }
 
 impl<K, V> ConcurrentMap<K, V> for NMTreeMap<K, V>
@@ -546,12 +700,41 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::NMTreeMap;
+    use super::{IterOrder, NMTreeMap};
     use crate::concurrent_map;
 
     #[test]
     #[ignore = "currently only support manual test to see memory usage in tracy"]
     fn smoke_nm_tree() {
         concurrent_map::tests::smoke::<NMTreeMap<i32, String>>();
+    }
+
+    #[test]
+    fn smoke_iter() {
+        let context = dyntls_host::get();
+        unsafe {
+            context.initialize();
+        }
+        let map = NMTreeMap::new();
+        let guard = &circ::cs();
+        map.insert(1, "a", &guard);
+        map.insert(2, "b", &guard);
+        map.insert(3, "c", &guard);
+        map.insert(4, "d", &guard);
+
+        let iter = map.iter(IterOrder::Ascending, &guard);
+        let mut results = vec![];
+        for (k, v) in iter {
+            results.push((*k, *v));
+        }
+
+        assert_eq!(results, vec![(1, "a"), (2, "b"), (3, "c"), (4, "d")]);
+
+        let iter = map.iter(IterOrder::Descending, &guard);
+        let mut results = vec![];
+        for (k, v) in iter {
+            results.push((*k, *v));
+        }
+        assert_eq!(results, vec![(4, "d"), (3, "c"), (2, "b"), (1, "a")]);
     }
 }
