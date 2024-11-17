@@ -231,7 +231,7 @@ impl PluginContext {
         let api_handle = api_handle.get(&guard).unwrap();
         let actual_version = api_handle.version();
         // check against the version declared in the crate itself, use semver methods
-        let request_version = crate::api::api_registry_api::api_registry_api_constants::VERSION;
+        let request_version = crate::api::api_registry_api::DynApiRegistryApi::VERSION;
         if actual_version < request_version {
             error!(
                 "Plugin load failed, api registry api version mismatch, actual: {}, request: {}",

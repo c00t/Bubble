@@ -74,12 +74,15 @@ pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
             .expect("Interface trait path should have at least one segment");
         quote! {
             impl self::Interface for #struct_name {
+                #[inline]
                 fn name(&self) -> &'static str {
                     <dyn #last_segment as InterfaceConstant>::NAME
                 }
+                #[inline]
                 fn version(&self) -> self::Version {
                     <dyn #last_segment as InterfaceConstant>::VERSION
                 }
+                #[inline]
                 fn id(&self) -> self::UniqueId {
                     <Self as self::UniqueTypeId>::TYPE_ID
                 }
@@ -122,6 +125,7 @@ pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
     //     };
     // } else {
     expanded = quote! {
+        // it make that when compile multiple times, the input's TYPE_ID is different
         #[make_trait_castable_random_self_id(Interface, #(#trait_segments),*)]
         #input
 
@@ -206,20 +210,24 @@ pub fn declare_interface(args: TokenStream, item: TokenStream) -> TokenStream {
         .collect::<Vec<_>>();
 
     let expanded = quote! {
-        pub(crate) mod #constant_mod_ident {
-            use super::Version;
-            pub const NAME: &'static str = ::std::stringify!(#path);
-            pub const VERSION: self::Version = self::Version::new(
-                #major,
-                #minor,
-                #patch
-            );
-        }
+        // pub(crate) mod #constant_mod_ident {
+        //     use super::Version;
+        //     pub const NAME: &'static str = ::std::stringify!(#path);
+        //     pub const VERSION: self::Version = self::Version::new(
+        //         #major,
+        //         #minor,
+        //         #patch
+        //     );
+        // }
 
         impl InterfaceConstant for #dyn_type_ident {
-            const NAME: &'static str = #constant_mod_ident::NAME;
+            const NAME: &'static str = <#dyn_type_ident as UniqueTypeId>::TYPE_NAME;
 
-            const VERSION: self::Version = #constant_mod_ident::VERSION;
+            const VERSION: self::Version = self::Version::new(
+                <#dyn_type_ident as UniqueTypeId>::TYPE_VERSION.0,
+                <#dyn_type_ident as UniqueTypeId>::TYPE_VERSION.1,
+                <#dyn_type_ident as UniqueTypeId>::TYPE_VERSION.2,
+            );
         }
 
         pub type #dyn_type_ident = dyn #trait_ident;
