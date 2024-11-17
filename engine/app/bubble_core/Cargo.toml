@@ -34,3 +34,5 @@ default = []
 custom_alloc_lib = []
 # Note that this feature should not gate codes that affect abi using the same compiler version.
 host = ["dep:dyntls-host"]
+# erase name of the UniqueTypeId, `stringify!(hash(type_path))`. only enable it for binary crate!!!
+erase_name = ["trait_cast_rs/erase_name"]

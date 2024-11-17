@@ -7,6 +7,6 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-bubble-core = { path = "../../app/bubble_core", default-features = false }
+bubble-core = { path = "../../app/bubble_core", default-features = false, features = ["erase_name"]}
 shared = { workspace = true }
 bubble-tasks = { workspace = true }
