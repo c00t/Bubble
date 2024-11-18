@@ -126,6 +126,12 @@ pub trait InterfaceConstant {
     const VERSION: Version;
 }
 
+/// A constant trait for interface instance.
+pub trait InterfaceInstanceConstant {
+    const INSTANCE_NAME: &'static str;
+    const INSTANCE_ID: UniqueId;
+}
+
 pub mod api_registry_api;
 pub mod bump_allocator_api;
 pub mod plugin_api;
@@ -141,8 +147,9 @@ pub mod prelude {
         make_trait_castable_decl, make_trait_castable_decl_random_self_id,
         make_trait_castable_decl_with_version, make_trait_castable_random_self_id,
         random_unique_id, unique_id, unique_id_without_version_hash, Api, ApiConstant, Interface,
-        InterfaceConstant, TraitcastTarget, TraitcastableAny, TraitcastableAnyInfra,
-        TraitcastableAnyInfraExt, TraitcastableTo, UniqueId, UniqueTypeId, Version,
+        InterfaceConstant, InterfaceInstanceConstant, TraitcastTarget, TraitcastableAny,
+        TraitcastableAnyInfra, TraitcastableAnyInfraExt, TraitcastableTo, UniqueId, UniqueTypeId,
+        Version,
     };
     pub use crate::bon::{bon, builder};
     pub use crate::sync::circ;

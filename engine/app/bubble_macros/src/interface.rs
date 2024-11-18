@@ -87,6 +87,11 @@ pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
                     <Self as self::UniqueTypeId>::TYPE_ID
                 }
             }
+
+            impl self::InterfaceInstanceConstant for #struct_name {
+                const INSTANCE_NAME: &'static str = <Self as self::UniqueTypeId>::TYPE_NAME;
+                const INSTANCE_ID: self::UniqueId = <Self as self::UniqueTypeId>::TYPE_ID;
+            }
         }
     });
 
@@ -126,7 +131,8 @@ pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
     // } else {
     expanded = quote! {
         // it make that when compile multiple times, the input's TYPE_ID is different
-        #[make_trait_castable_random_self_id(Interface, #(#trait_segments),*)]
+        // #[make_trait_castable_random_self_id(Interface, #(#trait_segments),*)]
+        #[make_trait_castable(Interface, #(#trait_segments),*)]
         #input
 
         #(#impl_interface_calls)*

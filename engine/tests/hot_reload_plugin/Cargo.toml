@@ -7,6 +7,8 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-bubble-core = { path = "../../app/bubble_core", default-features = false, features = ["erase_name"]}
+bubble-core = { path = "../../app/bubble_core", default-features = false, features = [
+    # "erase_name",
+] }
 const-random = "0.1.17"
 hot_reload_plugin_types = { path = "../hot_reload_plugin_types" }

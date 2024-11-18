@@ -4,7 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bubble-core = { path = "../../app/bubble_core", default-features = false, features = ["host", "erase_name"] }
+bubble-core = { path = "../../app/bubble_core", default-features = false, features = [
+    "host",
+    # "erase_name",
+] }
 dlopen2 = "0.7.0"
 shared = { workspace = true }
 bubble-tasks = { workspace = true }
