@@ -2,6 +2,9 @@
 //!
 //! Some Api methods should only be called on the main thread.
 #![feature(ptr_metadata)]
+#![feature(downcast_unchecked)]
+#![feature(min_specialization)]
+
 use bubble_core::api::{prelude::*, Api};
 use bubble_core::bon::bon;
 use bubble_core::sync::circ;

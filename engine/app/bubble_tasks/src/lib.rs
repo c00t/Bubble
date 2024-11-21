@@ -1,5 +1,7 @@
 //! Customed async runtime for dynamic shared library
 #![feature(ptr_metadata)]
+#![feature(downcast_unchecked)]
+#![feature(min_specialization)]
 
 pub use compio::*;
 pub mod task_system_api;

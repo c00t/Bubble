@@ -1,4 +1,5 @@
 #![feature(ptr_metadata)]
+#![feature(downcast_unchecked)]
 
 use bubble_core::{api::prelude::*, thread_local};
 

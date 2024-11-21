@@ -1,4 +1,5 @@
 #![feature(ptr_metadata)]
+#![feature(downcast_unchecked)]
 use bubble_core::api::{plugin_api::prelude::*, prelude::*};
 use bubble_core::sync::circ;
 use hot_reload_plugin_types::{DynHotReloadTestApi, HotReloadTestApi};
