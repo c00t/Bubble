@@ -9,6 +9,7 @@ pub mod os;
 pub mod sync;
 pub use bon;
 pub use tracing;
+pub mod utils;
 
 pub use os::thread::dyntls::{lazy_static, scoped_thread_local, thread_local};
 

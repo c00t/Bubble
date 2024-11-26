@@ -14,6 +14,7 @@ semver = "1.0.23"
 dyntls = { path = "../dyntls" }
 dyntls-host = { path = "../dyntls_host", optional = true}
 circ = { path = "../../third-party/vendor/circ"}
+circ-ds = {path = "../circ_ds"}
 trait_cast_rs = { path = "../../third-party/vendor/trait_cast_rs/trait_cast_rs" }
 bubble-macros = { workspace = true }
 anyhow = "1.0.90"
