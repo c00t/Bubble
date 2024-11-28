@@ -34,3 +34,6 @@
 [submodule "third-party/vendor/rust_tracy_client"]
 	path = third-party/vendor/rust_tracy_client
 	url = https://github.com/c00t/rust_tracy_client.git
+[submodule "third-party/vendor/mirror-mirror"]
+	path = third-party/vendor/mirror-mirror
+	url = https://github.com/c00t/mirror-mirror.git
