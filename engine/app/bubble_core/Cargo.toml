@@ -16,6 +16,7 @@ dyntls-host = { path = "../dyntls_host", optional = true}
 circ = { path = "../../third-party/vendor/circ"}
 circ-ds = {path = "../circ_ds"}
 trait_cast_rs = { path = "../../third-party/vendor/trait_cast_rs/trait_cast_rs" }
+fixed-type-id = { version = "0.1.0" }
 bubble-macros = { workspace = true }
 anyhow = "1.0.90"
 thiserror = "1.0.64"
@@ -36,4 +37,4 @@ custom_alloc_lib = []
 # Note that this feature should not gate codes that affect abi using the same compiler version.
 host = ["dep:dyntls-host"]
 # erase name of the UniqueTypeId, `stringify!(hash(type_path))`. only enable it for binary crate!!!
-erase_name = ["trait_cast_rs/erase_name"]
+erase_name = ["fixed-type-id/erase_name"]

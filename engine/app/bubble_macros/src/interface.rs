@@ -83,14 +83,14 @@ pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
                     <dyn #last_segment as InterfaceConstant>::VERSION
                 }
                 #[inline]
-                fn id(&self) -> self::UniqueId {
-                    <Self as self::UniqueTypeId>::TYPE_ID
+                fn id(&self) -> self::FixedId {
+                    <Self as self::FixedTypeId>::TYPE_ID
                 }
             }
 
             impl self::InterfaceInstanceConstant for #struct_name {
-                const INSTANCE_NAME: &'static str = <Self as self::UniqueTypeId>::TYPE_NAME;
-                const INSTANCE_ID: self::UniqueId = <Self as self::UniqueTypeId>::TYPE_ID;
+                const INSTANCE_NAME: &'static str = <Self as self::FixedTypeId>::TYPE_NAME;
+                const INSTANCE_ID: self::FixedId = <Self as self::FixedTypeId>::TYPE_ID;
             }
         }
     });
@@ -227,19 +227,19 @@ pub fn declare_interface(args: TokenStream, item: TokenStream) -> TokenStream {
         // }
 
         impl InterfaceConstant for #dyn_type_ident {
-            const NAME: &'static str = <#dyn_type_ident as UniqueTypeId>::TYPE_NAME;
+            const NAME: &'static str = <#dyn_type_ident as FixedTypeId>::TYPE_NAME;
 
             const VERSION: self::Version = self::Version::new(
-                <#dyn_type_ident as UniqueTypeId>::TYPE_VERSION.0,
-                <#dyn_type_ident as UniqueTypeId>::TYPE_VERSION.1,
-                <#dyn_type_ident as UniqueTypeId>::TYPE_VERSION.2,
+                <#dyn_type_ident as FixedTypeId>::TYPE_VERSION.major,
+                <#dyn_type_ident as FixedTypeId>::TYPE_VERSION.minor,
+                <#dyn_type_ident as FixedTypeId>::TYPE_VERSION.patch,
             );
         }
 
         pub type #dyn_type_ident = dyn #trait_ident;
 
-        unique_id_without_version_hash! {
-            #[UniqueTypeIdVersion((#major, #minor, #patch))]
+        fixed_type_id_without_version_hash! {
+            #[FixedTypeIdVersion((#major, #minor, #patch))]
             dyn #path
         }
 

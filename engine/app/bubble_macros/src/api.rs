@@ -195,19 +195,19 @@ pub fn declare_api(args: TokenStream, item: TokenStream) -> TokenStream {
         // }
 
         impl ApiConstant for #dyn_type_ident {
-            const NAME: &'static str = <#dyn_type_ident as UniqueTypeId>::TYPE_NAME;
+            const NAME: &'static str = <#dyn_type_ident as FixedTypeId>::TYPE_NAME;
 
             const VERSION: self::Version = self::Version::new(
-                <#dyn_type_ident as UniqueTypeId>::TYPE_VERSION.0,
-                <#dyn_type_ident as UniqueTypeId>::TYPE_VERSION.1,
-                <#dyn_type_ident as UniqueTypeId>::TYPE_VERSION.2,
+                <#dyn_type_ident as FixedTypeId>::TYPE_VERSION.major,
+                <#dyn_type_ident as FixedTypeId>::TYPE_VERSION.minor,
+                <#dyn_type_ident as FixedTypeId>::TYPE_VERSION.patch,
             );
         }
 
         pub type #dyn_type_ident = dyn #trait_ident;
 
-        unique_id_without_version_hash! {
-            #[UniqueTypeIdVersion((#major, #minor, #patch))]
+        fixed_type_id_without_version_hash! {
+            #[FixedTypeIdVersion((#major, #minor, #patch))]
             dyn #path
         }
 

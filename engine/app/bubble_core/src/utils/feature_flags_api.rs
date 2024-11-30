@@ -5,10 +5,10 @@ use circ_ds::{
 };
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct FeatureFlag(UniqueId);
+pub struct FeatureFlag(FixedId);
 
 impl FeatureFlag {
-    pub fn new<T: UniqueTypeId>() -> Self {
+    pub fn new<T: FixedTypeId>() -> Self {
         FeatureFlag(T::TYPE_ID)
     }
 }
@@ -84,7 +84,7 @@ mod tests {
         struct FeatureFlag1;
         struct FeatureFlag2;
 
-        unique_id! {
+        fixed_type_id! {
             FeatureFlag1;
             FeatureFlag2;
         }

@@ -428,7 +428,7 @@ impl Interface for AnyInterfaceHandle {
             .expect("Invalid AnyInterfaceHandle")
     }
 
-    fn id(&self) -> UniqueId {
+    fn id(&self) -> FixedId {
         let guard = circ::cs();
         let snapshot = self.0.as_ref().unwrap().load(Relaxed, &guard);
         snapshot
@@ -597,7 +597,7 @@ pub trait ApiRegistryApi: Api {
         &self,
         name: &'static str,
         from_version: Version,
-        instance_id: UniqueId,
+        instance_id: FixedId,
         dep_id: Option<DepId>,
     );
     /// Get the number of interfaces with specific name and compatible version.
@@ -620,7 +620,7 @@ pub trait ApiRegistryApi: Api {
         &self,
         name: &'static str,
         version: Version,
-    ) -> Option<(UniqueId, AnyInterfaceHandle)>;
+    ) -> Option<(FixedId, AnyInterfaceHandle)>;
     /// Get all available versions of an api.
     fn available_api_versions(&self, name: &'static str) -> Vec<Version>;
     /// Get one new dependency context which is a child of the given parent.
@@ -916,7 +916,7 @@ impl ApiRegistry {
         &self,
         name: &'static str,
         from_version: Version,
-        instance_id: UniqueId,
+        instance_id: FixedId,
         dep_id: Option<DepId>,
     ) {
         let mut w_lock = self.inner_interfaces.write().unwrap();
@@ -1172,7 +1172,7 @@ impl ApiRegistry {
         &self,
         name: &'static str,
         version: Version,
-    ) -> Option<(UniqueId, AnyInterfaceHandle)> {
+    ) -> Option<(FixedId, AnyInterfaceHandle)> {
         let id = VersionedName::new(name, version.clone());
         info!("Getting Single Interface: expecting {}", id);
         let r_lock = self.inner_interfaces.read().unwrap();
@@ -1354,7 +1354,7 @@ impl ApiRegistryApi for ApiRegistry {
         &self,
         name: &'static str,
         version: Version,
-    ) -> Option<(UniqueId, AnyInterfaceHandle)> {
+    ) -> Option<(FixedId, AnyInterfaceHandle)> {
         self.single_interface(name, version)
     }
 
@@ -1366,7 +1366,7 @@ impl ApiRegistryApi for ApiRegistry {
         &self,
         name: &'static str,
         from_version: Version,
-        instance_id: UniqueId,
+        instance_id: FixedId,
         dep_id: Option<DepId>,
     ) {
         self.remove_interface(name, from_version, instance_id, dep_id)
@@ -1427,7 +1427,7 @@ impl<'local> LocalApiHandle<'local, dyn ApiRegistryApi> {
     pub fn local_remove_interface<T: InterfaceConstant + Interface + ?Sized>(
         &self,
         from_version: Version,
-        instance_id: UniqueId,
+        instance_id: FixedId,
         dep_id: Option<DepId>,
     ) {
         self.deref()

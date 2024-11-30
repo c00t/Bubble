@@ -16,8 +16,8 @@ pub struct TraitCastableDrop {
     pub value: i32,
 }
 
-unique_id! {
-    #[UniqueTypeIdVersion((0,1,0))]
+fixed_type_id! {
+    #[FixedTypeIdVersion((0,1,0))]
     dyn TraitCastableDropSuper;
     dyn TraitCastableDropSub;
 }

@@ -3,9 +3,13 @@ pub use semver::Version;
 use std::any::Any;
 pub use trait_cast_rs::{
     make_trait_castable, make_trait_castable_decl, make_trait_castable_decl_random_self_id,
-    make_trait_castable_decl_with_version, make_trait_castable_random_self_id, random_unique_id,
-    unique_id, unique_id_without_version_hash, TraitcastTarget, TraitcastableAny,
-    TraitcastableAnyInfra, TraitcastableAnyInfraExt, TraitcastableTo, UniqueId, UniqueTypeId,
+    make_trait_castable_decl_with_version, make_trait_castable_random_self_id, TraitcastTarget,
+    TraitcastableAny, TraitcastableAnyInfra, TraitcastableAnyInfraExt, TraitcastableTo,
+};
+
+pub use fixed_type_id::{
+    fixed_type_id, fixed_type_id_without_version_hash, random_fixed_type_id, FixedId, FixedTypeId,
+    FixedVersion,
 };
 
 mod interfaces;
@@ -62,7 +66,7 @@ impl<T: Api + ?Sized> Api for Box<T> {
 }
 
 // We currently don't add version to [`Api`], it's the super trait for all api traits.
-unique_id! {
+fixed_type_id! {
     dyn bubble_core::api::api_registry_api::Api;
 }
 
@@ -87,7 +91,7 @@ pub trait Interface: Any + Sync + Send {
     ///
     /// It's used to identify the instances of the interface trait object. Because one interface trait can be implemented by multiple plugins,
     /// we need to identify them by a unique id.
-    fn id(&self) -> UniqueId;
+    fn id(&self) -> FixedId;
 }
 
 impl<T: Interface + ?Sized> Interface for Box<T> {
@@ -99,12 +103,12 @@ impl<T: Interface + ?Sized> Interface for Box<T> {
         T::version(&self)
     }
 
-    fn id(&self) -> UniqueId {
+    fn id(&self) -> FixedId {
         T::id(&self)
     }
 }
 
-unique_id! {
+fixed_type_id! {
     dyn bubble_core::api::api_registry_api::Interface;
 }
 
@@ -129,7 +133,7 @@ pub trait InterfaceConstant {
 /// A constant trait for interface instance.
 pub trait InterfaceInstanceConstant {
     const INSTANCE_NAME: &'static str;
-    const INSTANCE_ID: UniqueId;
+    const INSTANCE_ID: FixedId;
 }
 
 pub mod api_registry_api;
@@ -143,14 +147,20 @@ pub mod prelude {
         LocalApiHandle, LocalInterfaceHandle,
     };
     pub use super::{
-        declare_api, declare_interface, define_api, define_interface, make_trait_castable,
-        make_trait_castable_decl, make_trait_castable_decl_random_self_id,
-        make_trait_castable_decl_with_version, make_trait_castable_random_self_id,
-        random_unique_id, unique_id, unique_id_without_version_hash, Api, ApiConstant, Interface,
-        InterfaceConstant, InterfaceInstanceConstant, TraitcastTarget, TraitcastableAny,
-        TraitcastableAnyInfra, TraitcastableAnyInfraExt, TraitcastableTo, UniqueId, UniqueTypeId,
-        Version,
+        declare_api, declare_interface, define_api, define_interface, fixed_type_id,
+        fixed_type_id_without_version_hash, make_trait_castable, make_trait_castable_decl,
+        make_trait_castable_decl_random_self_id, make_trait_castable_decl_with_version,
+        make_trait_castable_random_self_id, random_fixed_type_id, Api, ApiConstant, FixedId,
+        FixedTypeId, FixedVersion, Interface, InterfaceConstant, InterfaceInstanceConstant,
+        TraitcastTarget, TraitcastableAny, TraitcastableAnyInfra, TraitcastableAnyInfraExt,
+        TraitcastableTo, Version,
     };
+    pub mod __fixed_type_id {
+        pub use fixed_type_id::{
+            fixed_type_id, fixed_type_id_without_version_hash, random_fixed_type_id,
+        };
+        pub use fixed_type_id::{FixedId, FixedTypeId, FixedVersion};
+    }
     pub use crate::bon::{bon, builder};
     pub use crate::sync::circ;
 }
