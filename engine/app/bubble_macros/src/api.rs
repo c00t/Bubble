@@ -4,27 +4,50 @@ use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
     punctuated::Punctuated,
-    DeriveInput, ExprTuple, FnArg, ItemTrait, Path, Token, TraitItem,
+    DeriveInput, ExprTuple, FnArg, Ident, ItemTrait, Path, Token, TraitItem,LitBool,
 };
 
 use crate::shared::{dyn_ident, snake_case, Version};
 
 struct ApiDefineAttr {
-    api_trait_paths: Punctuated<Path, Token![,]>,
+    api_trait_paths: Vec<Path>,
+    skip_castable: bool,
 }
 
 impl Parse for ApiDefineAttr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        // Parse one or more trait paths separated by commas
-        let api_trait_paths = Punctuated::parse_terminated(input)?;
+        let mut api_trait_paths = Vec::new();
+        let mut skip_castable = false;
 
-        Ok(ApiDefineAttr { api_trait_paths })
+        while !input.is_empty() {
+            if input.peek(Ident) && input.peek2(Token![=]) {
+                let ident: Ident = input.parse()?;
+                let _eq_token: Token![=] = input.parse()?;
+                match ident.to_string().as_str() {
+                    "skip_castable" => {
+                        skip_castable = input.parse::<LitBool>()?.value;
+                    }
+                    _ => return Err(syn::Error::new(ident.span(), "Unknown attribute key")),
+                }
+            } else {
+                api_trait_paths.push(input.parse()?);
+            }
+            
+            if !input.is_empty() {
+                let _: Token![,] = input.parse()?;
+            }
+        }
+
+        Ok(ApiDefineAttr {
+            api_trait_paths,
+            skip_castable,
+        })
     }
 }
 
 pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
-    let ApiDefineAttr { api_trait_paths } = parse_macro_input!(attr as ApiDefineAttr);
+    let ApiDefineAttr { api_trait_paths, skip_castable } = parse_macro_input!(attr as ApiDefineAttr);
 
     assert_eq!(api_trait_paths.len(), 1, "Only 1 path permitted");
 
@@ -41,9 +64,10 @@ pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
                 .clone()
         })
         .collect();
-    // Extract generics information
+
     let generics = &input.generics;
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
     // Generate impl_api! calls for all trait paths
     let impl_api_calls = api_trait_paths.iter().map(|path| {
         let last_segment = path
@@ -69,23 +93,9 @@ pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
         let last_segment = path.segments.last()
             .expect("API trait path should have at least one segment");
         let api_trait_last_path = &last_segment.ident;
-        let register_api_fn_name = format_ident!("register_{}", snake_case(&api_trait_last_path.to_string()));
-        let doc_comment = format!("Register one {} instance into the API registry", api_trait_last_path);
-        let dyn_type_ident = dyn_ident(&last_segment.ident);
         let local_api_handle = format_ident!("{}Handle", api_trait_last_path);
+        let dyn_type_ident = dyn_ident(&last_segment.ident);
         quote! {
-            // #[doc = #doc_comment]
-            // pub fn #register_api_fn_name #impl_generics (
-            //     api_registry_api: &ApiHandle<dyn ApiRegistryApi>, 
-            //     dep_id: Option<DepId>
-            // ) -> ApiHandle<#dyn_type_ident> #where_clause {
-            //     let guard = circ::cs();
-            //     api_registry_api
-            //         .get(&guard)
-            //         .expect("Failed to get API registry api")
-            //         .local_set::<#dyn_type_ident>(#struct_name #ty_generics::builder().build().into(), dep_id)
-            // }
-
             pub struct #local_api_handle<'local> {
                 api: LocalApiHandle<'local, #dyn_type_ident>
             }
@@ -98,8 +108,17 @@ pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     });
 
+    // Conditionally include the make_trait_castable attribute
+    let trait_castable = if !skip_castable {
+        quote! {
+            #[make_trait_castable(Api, #(#trait_segments),*)]
+        }
+    } else {
+        quote! {}
+    };
+
     let expanded = quote! {
-        #[make_trait_castable(Api, #(#trait_segments),*)]
+        #trait_castable
         #input
 
         #(#impl_api_calls)*
