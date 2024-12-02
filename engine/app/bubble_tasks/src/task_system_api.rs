@@ -196,9 +196,11 @@ pub fn get_task_system_api(
     task_system_api.downcast()
 }
 
-#[bon]
+pub fn get_task_system_api_default() -> ApiHandle<dyn TaskSystemApi> {
+    TaskSystem::new()
+}
+
 impl TaskSystem {
-    #[builder]
     pub fn new() -> ApiHandle<dyn TaskSystemApi> {
         let topology = Topology::new().ok();
         let cpu_locality = HwCpuBindingLocality::new(&topology).and_then(|locality| {

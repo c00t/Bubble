@@ -12,3 +12,4 @@ bubble-core = { path = "../../app/bubble_core", default-features = false, featur
 ] }
 const-random = "0.1.17"
 hot_reload_plugin_types = { path = "../hot_reload_plugin_types" }
+bon = "3.2.0"

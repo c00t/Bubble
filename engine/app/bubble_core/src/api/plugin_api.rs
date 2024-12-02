@@ -530,9 +530,11 @@ struct PluginsRegistry {
 
 static PLUGINS_REGISTRY: OnceLock<ApiHandle<DynPluginApi>> = OnceLock::new();
 
-#[bon]
+pub fn get_default_plugin_api() -> ApiHandle<dyn PluginApi> {
+    PluginsRegistry::new()
+}
+
 impl PluginsRegistry {
-    #[builder]
     pub fn new() -> ApiHandle<DynPluginApi> {
         PLUGINS_REGISTRY
             .get_or_init(|| {

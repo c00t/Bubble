@@ -161,6 +161,5 @@ pub mod prelude {
         };
         pub use fixed_type_id::{FixedId, FixedTypeId, FixedVersion};
     }
-    pub use crate::bon::{bon, builder};
     pub use crate::sync::circ;
 }

@@ -41,22 +41,17 @@ pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
                 .clone()
         })
         .collect();
-
+    // Extract generics information
+    let generics = &input.generics;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     // Generate impl_api! calls for all trait paths
     let impl_api_calls = api_trait_paths.iter().map(|path| {
         let last_segment = path
             .segments
             .last()
             .expect("API trait path should have at least one segment");
-        let constant_mod_ident = format_ident!(
-            "{}",
-            format!(
-                "{}",
-                snake_case(&format!("{}Constants", last_segment.ident))
-            )
-        );
         quote! {
-            impl self::Api for #struct_name {
+            impl #impl_generics self::Api for #struct_name #ty_generics #where_clause {
                 #[inline]
                 fn name(&self) -> &'static str {
                     <dyn #last_segment as ApiConstant>::NAME
@@ -79,20 +74,22 @@ pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
         let dyn_type_ident = dyn_ident(&last_segment.ident);
         let local_api_handle = format_ident!("{}Handle", api_trait_last_path);
         quote! {
-            #[doc = #doc_comment]
-            pub fn #register_api_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>, dep_id: Option<DepId>) -> ApiHandle<#dyn_type_ident> {
-                let guard = circ::cs();
-                api_registry_api
-                    .get(&guard)
-                    .expect("Failed to get API registry api")
-                    .local_set::<#dyn_type_ident>(#struct_name::builder().build().into(), dep_id)
-            }
+            // #[doc = #doc_comment]
+            // pub fn #register_api_fn_name #impl_generics (
+            //     api_registry_api: &ApiHandle<dyn ApiRegistryApi>, 
+            //     dep_id: Option<DepId>
+            // ) -> ApiHandle<#dyn_type_ident> #where_clause {
+            //     let guard = circ::cs();
+            //     api_registry_api
+            //         .get(&guard)
+            //         .expect("Failed to get API registry api")
+            //         .local_set::<#dyn_type_ident>(#struct_name #ty_generics::builder().build().into(), dep_id)
+            // }
 
             pub struct #local_api_handle<'local> {
                 api: LocalApiHandle<'local, #dyn_type_ident>
             }
 
-            // implement From<LocalApiHandle<'local, #dyn_type_ident>> for #local_api_handle<'local>
             impl<'local> From<LocalApiHandle<'local, #dyn_type_ident>> for #local_api_handle<'local> {
                 fn from(api: LocalApiHandle<'local, #dyn_type_ident>) -> Self {
                     Self { api }

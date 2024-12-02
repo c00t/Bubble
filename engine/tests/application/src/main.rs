@@ -243,9 +243,19 @@ fn main() {
     let x = api_registry_api.get(&guard).unwrap();
     // 2. set api
     println!("...");
-    let task_system_api =
-        bubble_tasks::task_system_api::register_task_system_api(&api_registry_api, None); // task: strong count 4
-    let plugin_api = bubble_core::api::plugin_api::register_plugin_api(&api_registry_api, None);
+    let task_system_api = {
+        let guard = circ::cs();
+        let api = bubble_tasks::task_system_api::get_task_system_api_default();
+        api_registry_api.get(&guard).expect("Failed to get API registry api").local_set(api, None)
+    };
+    // let task_system_api =
+    //     bubble_tasks::task_system_api::register_task_system_api(&api_registry_api, None); // task: strong count 4
+    // let plugin_api = bubble_core::api::plugin_api::register_plugin_api(&api_registry_api, None);
+    let plugin_api = {
+        let guard = circ::cs();
+        let api = bubble_core::api::plugin_api::get_default_plugin_api();
+        api_registry_api.get(&guard).expect("Failed to get API registry api").local_set(api, None)
+    };
     let hot_reload_test_api = api_registry_api
         .get(&guard)
         .unwrap()
