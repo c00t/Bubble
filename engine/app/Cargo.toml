@@ -12,6 +12,7 @@ members = [
     "dyntls_host",
     "circ_ds",
     "bubble_basin",
+    "bubble_tests",
 ]
 resolver = "2"
 
