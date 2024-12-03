@@ -61,14 +61,14 @@ pub mod mimalloc {
 pub mod system {
     use std::alloc::Layout;
     #[cfg(feature = "tracy_memory")]
-    use std::alloc::{Global, GlobalAlloc};
+    use std::alloc::{Global, GlobalAlloc, System};
 
     #[cfg(feature = "tracy_memory")]
     use tracy_client::ProfiledAllocator;
 
     #[cfg(feature = "tracy_memory")]
     #[global_allocator]
-    static GLOBAL_ALLOC: ProfiledAllocator<Global> = ProfiledAllocator::new(Global, 100);
+    static GLOBAL_ALLOC: ProfiledAllocator<System> = ProfiledAllocator::new(System, 100);
 
     #[allow(improper_ctypes_definitions)]
     #[no_mangle]
