@@ -5,4 +5,22 @@ edition = "2021"
 
 [dependencies]
 bilrost = "0.1010.1"
-rkyv = "0.8.8"
+# it's a glam for which bump rkyv version to 0.8
+glam = { git = "https://github.com/c00t/glam-rs.git", rev = "2ebe68a6db44f6ee05f9570d238fb9b158d91ba5", features = ["rkyv", "serde"] }
+rkyv = { version = "0.8" }
+mirror-mirror = { path = "../../third-party/vendor/mirror-mirror/crates/mirror-mirror" }
+sharded-slab = { path = "../../third-party/vendor/sharded-slab" }
+bubble-core = { path = "../bubble_core" }
+bubble-tasks = { path = "../bubble_tasks" }
+circ-ds = { path = "../circ_ds" }
+bitflags = "2.6.0"
+uuid = { version = "1.11.0", features = ["v7"] }
+quick_cache = "0.6.9"
+url = "2.5.4"
+bon = "3.2.0"
+rapidhash = "1.1.0"
+
+[dev-dependencies]
+bubble-tests = { path = "../bubble_tests", features = ["tracy"] }
+tempfile = "*"
+rand = "=0.9.0-alpha.2"

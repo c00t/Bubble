@@ -1,6 +1,7 @@
 use bubble_basin::prototype::rkyv_prototype::*;
 use rkyv::rancor::Error;
-fn main() {
+#[test]
+pub fn versioned_example() {
     // workable! types leak to crate users, but it's more ergonomic to just use major/minor/patch instead of type `Example{VERSION}` generic type
     let example010 = Example::builder()
         .a(1)
