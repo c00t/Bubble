@@ -159,7 +159,7 @@ pub mod prelude {
         pub use fixed_type_id::{
             fixed_type_id, fixed_type_id_without_version_hash, random_fixed_type_id,
         };
-        pub use fixed_type_id::{FixedId, FixedTypeId, FixedVersion};
+        pub use fixed_type_id::{fstr_to_str, ConstTypeName, FixedId, FixedTypeId, FixedVersion};
     }
     pub use crate::sync::circ;
 }
