@@ -1,3 +1,4 @@
+pub mod utils;
 use std::{
     future::Future,
     path::PathBuf,
@@ -16,10 +17,10 @@ use bubble_core::{
 use bubble_tasks::{async_ffi::FutureExt, types::TaskSystemApi};
 
 pub struct TestSkeleton {
-    cwd: PathBuf,
-    api_registry_api: ApiHandle<dyn ApiRegistryApi>,
-    task_system_api: ApiHandle<dyn TaskSystemApi>,
-    plugin_api: ApiHandle<dyn PluginApi>,
+    pub cwd: PathBuf,
+    pub api_registry_api: ApiHandle<dyn ApiRegistryApi>,
+    pub task_system_api: ApiHandle<dyn TaskSystemApi>,
+    pub plugin_api: ApiHandle<dyn PluginApi>,
 }
 
 impl TestSkeleton {
@@ -61,28 +62,31 @@ impl TestSkeleton {
         }
     }
 
-    pub fn create_tick_thread<T>(&self, tick_fut: fn() -> T) -> JoinHandle<()>
+    pub fn create_tick_thread<T, I>(&self, tick_fut: fn(I) -> T, tick_fut_arg: I) -> JoinHandle<()>
     where
         T: Future<Output = bool> + 'static,
+        I: Clone + Send + 'static,
     {
         let task_system_api_clone = self.task_system_api.clone();
         let plugin_api_clone = self.plugin_api.clone();
+        let guard_create = || circ::cs();
         thread::Builder::new()
             .name("Tick Thread".to_string())
             .spawn(move || {
                 let task_system = task_system_api_clone;
                 let plugin = plugin_api_clone;
-                let guard = circ::cs();
+                let guard = guard_create();
                 let task_api = task_system.get(&guard).unwrap();
                 while unsafe {
                     let plugin_api = plugin.clone();
                     // let tick_fut_clone = tick_fut.clone();
+                    let tick_fut_arg_clone = tick_fut_arg.clone();
                     task_api.tick(
                         async move {
                             let guard = circ::cs();
                             let plugin_api = plugin_api.get(&guard).unwrap();
                             let reload = plugin_api.check_hot_reload_tick();
-                            let b = tick_fut().await;
+                            let b = tick_fut(tick_fut_arg_clone).await;
                             #[cfg(feature = "tracy")]
                             tracing::event!(
                                 tracing::Level::INFO,
