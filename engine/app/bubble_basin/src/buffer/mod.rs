@@ -20,6 +20,7 @@ use bon::{bon, builder};
 use bubble_core::api::prelude::*;
 use bubble_core::sync::circ::{AtomicRc, RcObject};
 use bubble_core::tracing;
+use bubble_core::utils::hash::rapidhash::RapidInlineHasher;
 use bubble_tasks::async_ffi::FutureExt;
 use bubble_tasks::buf::{IoBuf, IoBufMut, SetBufInit};
 use bubble_tasks::futures_channel::oneshot;
@@ -30,7 +31,6 @@ use circ_ds::concurrent_map::OutputHolder;
 use circ_ds::natarajan_mittal_tree::NMTreeMap;
 use quick_cache::sync::Cache;
 use quick_cache::{DefaultHashBuilder, Lifecycle, Weighter};
-use rapidhash::RapidInlineHasher;
 pub use rkyv::util::AlignedVec;
 use sharded_slab::Slab;
 use url::Url;
@@ -348,6 +348,13 @@ pub enum BufferAsyncResult {
     Loading(oneshot::Receiver<Option<Rc<Buffer>>>),
 }
 
+pub enum BufferAsyncSnapshotResult<'g> {
+    /// The buffer is already loaded into memory.
+    Loaded(Snapshot<'g, Buffer>),
+    /// The buffer is not loaded into memory, and the file is being loaded asynchronously.
+    Loading(oneshot::Receiver<Option<Snapshot<'g, Buffer>>>),
+}
+
 #[declare_api((0,1,0), bubble_basin::buffer::BasinBufferApi)]
 pub trait BasinBufferApi: Api {
     /// Add a buffer to the storage, and return the id of the buffer.
@@ -372,8 +379,13 @@ pub trait BasinBufferApi: Api {
     ///   If there is a buffer with the same hash already in the storage, it will return the existing buffer's id.
     ///   **But your metadata provided will be ignored, the existing buffer's metadata will be used.**
     fn add(&self, options: BufferOptions) -> BufferId;
+
+    /// Remove a buffer from the storage.
+    fn remove(&self, id: BufferId);
+
     /// Get the buffer [`circ::Rc`] from the storage, this function ensure that the buffer is loaded into memory.
     fn get(&self, id: BufferId) -> Option<Rc<Buffer>>;
+
     /// Get the buffer [`circ::Snapshot`] from the storage, this function ensure that the buffer is loaded into memory.
     ///
     /// This method may be more efficient than [`BasinBufferApi::get`] if you don't need to hold the buffer alive longer than the scope of the guard.
@@ -382,20 +394,32 @@ pub trait BasinBufferApi: Api {
         id: BufferId,
         guard: &'g circ::Guard,
     ) -> Option<Snapshot<'g, Buffer>>;
+
     /// Get the buffer from the storage, this function return a channel that will receive the handler to the buffer.
     fn get_async(&self, id: BufferId) -> Result<BufferAsyncResult, ()>;
+
+    // /// Get the buffer snapshot from the storage, this function return a channel that will receive the handler to the buffer snapshot.
+    // ///
+    // /// Note: because that the task system only accept `'static` future, we must have 'g: 'static,
+    // ///     it's useless to use snapshot.
+    // fn get_async_snapshot<'g>(&self, id: BufferId, guard: &'g circ::Guard) -> Result<BufferAsyncSnapshotResult<'g>, ()>;
     /// Get size of the buffer.
     ///
     /// It's the runtime size of underlying data.
     fn buffer_size(&self, id: BufferId) -> Option<usize>;
+
     /// Get the number of cached buffers.
     fn cached_len(&self) -> usize;
+
     /// Whether the buffer is loaded into memory?
     fn is_loaded(&self, id: BufferId) -> bool;
+
     /// Whether this buffer have a backing storage?
     fn is_persistent(&self, id: BufferId) -> bool;
+
     /// Get the hash of the buffer.
     fn hash(&self, id: BufferId) -> Option<u64>;
+
     /// Load the buffer into buffer storage using task system, this function should be non-blocking.
     fn load(&self, id: BufferId);
 }
@@ -473,6 +497,11 @@ where
                 todo!()
             }
         }
+    }
+
+    fn remove(&self, id: BufferId) {
+        tracing::info!("Removing buffer with ID: {:?}", id);
+        self.data.remove(id.runtime_key());
     }
 
     fn get(&self, id: BufferId) -> Option<Rc<Buffer>> {
@@ -628,12 +657,14 @@ where
                     (None, 0) => {
                         let size = file.metadata().unwrap().len() as usize;
                         let mut file_buffer = AlignedVec::with_capacity(size);
+                        file_buffer.resize(size, 0);
                         file.read_exact(&mut file_buffer).unwrap();
                         (file_buffer, size)
                     }
                     _ => {
                         let file_size = file.metadata().unwrap().len() as usize;
                         let mut file_buffer = Vec::with_capacity(file_size);
+                        file_buffer.resize(file_size, 0);
                         file.read_exact(&mut file_buffer).unwrap();
                         let start = *offset;
                         let len = size.unwrap_or(file_size - start);
@@ -696,10 +727,18 @@ where
             } => {
                 tracing::debug!("Buffer is a local storage buffer");
                 // 1. If the buffer is already loaded return it.
-                let buffer = self.disk_cache.get(&id);
-                if let Some(buffer) = buffer {
-                    tracing::info!("Local storage buffer already loaded");
-                    return Ok(BufferAsyncResult::Loaded(buffer));
+                // let buffer = self.disk_cache.get(&id);
+                // if let Some(buffer) = buffer {
+                //     tracing::info!("Local storage buffer already loaded");
+                //     return Ok(BufferAsyncResult::Loaded(buffer));
+                // }
+                {
+                    let guard = circ::cs();
+                    let snapshot = buffer_object.data.load(Ordering::Acquire, &guard);
+                    if !snapshot.is_null() {
+                        tracing::info!("Local storage buffer already loaded");
+                        return Ok(BufferAsyncResult::Loaded(snapshot.counted()));
+                    }
                 }
 
                 // 2. If not, we need to load it from local storage.

@@ -1,15 +1,17 @@
 use std::{collections::HashMap, hash::BuildHasher, sync::Arc};
 
 use bubble_basin::buffer::{
-    BasinBufferApi, Buffer, BufferEvictionLifeCycle, BufferId, BufferOptions, BufferStorage,
-    LayeredLifecycle,
+    BasinBufferApi, Buffer, BufferAsyncResult, BufferEvictionLifeCycle, BufferId, BufferOptions,
+    BufferStorage, LayeredLifecycle,
 };
 use bubble_core::{
     api::{api_registry_api, prelude::*},
     sync::circ::Rc,
     tracing,
+    utils::hash::RapidInlineBuildHasher,
 };
 use bubble_tasks::{
+    async_ffi::FutureExt,
     futures_util::{stream::futures_unordered, StreamExt},
     types::TaskSystemApi,
 };
@@ -33,27 +35,6 @@ fixed_type_id_without_version_hash! {
     bubble_basin::tests::TestWeighter
 }
 
-#[derive(Clone)]
-struct TestBuildHasher(rapidhash::RapidInlineBuildHasher);
-
-impl TestBuildHasher {
-    pub fn new() -> Self {
-        Self(rapidhash::RapidInlineBuildHasher::default())
-    }
-}
-
-impl BuildHasher for TestBuildHasher {
-    fn build_hasher(&self) -> Self::Hasher {
-        self.0.build_hasher()
-    }
-
-    type Hasher = <rapidhash::RapidInlineBuildHasher as BuildHasher>::Hasher;
-}
-
-fixed_type_id_without_version_hash! {
-    bubble_basin::tests::TestBuildHasher
-}
-
 #[test]
 pub fn smoke() {
     let files = create_test_files();
@@ -75,7 +56,7 @@ pub fn smoke() {
             .unwrap(),
         TestWeighter {},
         // for
-        TestBuildHasher::new(),
+        RapidInlineBuildHasher::default(),
         life_cycle,
     ));
 
@@ -166,38 +147,126 @@ pub fn smoke() {
 
     // tracing::info!("End of std::thread::spawn");
 
-    // let mut futures = futures_unordered::FuturesUnordered::new();
+    // // Test `local_buffer_api.get(id)`
+    // for _ in 0..100 {
+    //     let buffer_api_clone = buffer_api.clone();
+    //     let hashmap_clone = hashmap.clone();
+    //     let Ok(_) = local_task_system_api.dispatch_blocking(
+    //         None,
+    //         Box::new(move || {
+    //             let mut rng = rand::thread_rng();
+    //             let mut guard = circ::cs();
+    //             let mut vec: Vec<(BufferId, String)> = hashmap_clone
+    //                 .iter()
+    //                 .map(|(id, filename)| (*id, filename.clone()))
+    //                 .collect();
+    //             vec.shuffle(&mut rng);
+    //             for (id, filename) in vec {
+    //                 let local_buffer_api = buffer_api_clone.get(&guard).unwrap();
+    //                 let _x = local_buffer_api.get(id).unwrap();
+    //                 drop(_x);
+    //                 guard.reactivate();
+    //             }
+    //             // !!!!!!!!
+    //             // Make sure that you flush the guard when use it in thread pool.
+    //             guard.flush();
+    //             drop(guard);
+    //         }),
+    //     ) else {
+    //         panic!()
+    //     };
+    // }
+    // drop(cs);
+    // // end test
 
+    // // Test `local_buffer_api.get_snapshot(id)`
+    // // The memory reclaim time should be shorter compared to `local_buffer_api.get(id)`.
+    // for _ in 0..100 {
+    //     let buffer_api_clone = buffer_api.clone();
+    //     let hashmap_clone = hashmap.clone();
+    //     let Ok(_) = local_task_system_api.dispatch_blocking(
+    //         None,
+    //         Box::new(move || {
+    //             let mut rng = rand::thread_rng();
+    //             let mut guard = circ::cs();
+    //             let mut vec: Vec<(BufferId, String)> = hashmap_clone
+    //                 .iter()
+    //                 .map(|(id, filename)| (*id, filename.clone()))
+    //                 .collect();
+    //             vec.shuffle(&mut rng);
+    //             for (id, filename) in vec {
+    //                 let local_buffer_api = buffer_api_clone.get(&guard).unwrap();
+    //                 let _x = local_buffer_api.get_snapshot(id, &guard).unwrap();
+    //                 // !!!!!!!!
+    //                 // reactivate frequently will shorten the memory reclaim time, **by eagerly advancing the epoch**.
+    //                 // If disabled, the memory will be reclaimed epoch by epoch.
+    //                 guard.reactivate();
+    //             }
+    //             // !!!!!!!!
+    //             // Make sure that you flush the guard when use it in thread pool.
+    //             // Or the memory can't be reclaimed.
+    //             guard.flush();
+    //             drop(guard);
+    //         }),
+    //     ) else {
+    //         panic!()
+    //     };
+    // }
+    // drop(cs);
+    // // end test
+
+    // Test `local_buffer_api.get_async(id)`
     for _ in 0..100 {
         let buffer_api_clone = buffer_api.clone();
         let hashmap_clone = hashmap.clone();
-        let Ok(_) = local_task_system_api.dispatch_blocking(
+        let Ok(_) = local_task_system_api.dispatch(
             None,
             Box::new(move || {
-                let mut rng = rand::thread_rng();
-                let mut guard = circ::cs();
-                let mut vec: Vec<(BufferId, String)> = hashmap_clone
-                    .iter()
-                    .map(|(id, filename)| (*id, filename.clone()))
-                    .collect();
-                vec.shuffle(&mut rng);
-                for (id, filename) in vec {
-                    let local_buffer_api = buffer_api_clone.get(&guard).unwrap();
-                    let _x = local_buffer_api.get(id).unwrap();
-                    drop(_x);
-                    guard.reactivate();
+                async move {
+                    let mut rng = rand::thread_rng();
+                    let mut guard = circ::cs();
+                    let mut vec: Vec<(BufferId, String)> = hashmap_clone
+                        .iter()
+                        .map(|(id, filename)| (*id, filename.clone()))
+                        .collect();
+                    vec.shuffle(&mut rng);
+                    for (id, filename) in vec {
+                        let local_buffer_api = buffer_api_clone.get(&guard).unwrap();
+                        // let _x = local_buffer_api.get_snapshot(id, &guard).unwrap();
+                        match local_buffer_api.get_async(id).unwrap() {
+                            BufferAsyncResult::Loaded(x) => {
+                                drop(x);
+                            }
+                            BufferAsyncResult::Loading(ch) => match ch.await.unwrap() {
+                                Some(x) => {
+                                    drop(x);
+                                }
+                                None => {
+                                    tracing::warn!(
+                                        "buffer meta has been removed from buffer storage"
+                                    );
+                                }
+                            },
+                        }
+                        // !!!!!!!!
+                        // reactivate frequently will shorten the memory reclaim time, **by eagerly advancing the epoch**.
+                        // If disabled, the memory will be reclaimed epoch by epoch.
+                        guard.reactivate();
+                    }
+                    // !!!!!!!!
+                    // Make sure that you flush the guard when use it in thread pool.
+                    // Or the memory can't be reclaimed.
+                    guard.flush();
+                    drop(guard);
                 }
-                // !!!!!!!!
-                // Make sure that you flush the guard when use it in thread pool.
-                guard.flush();
-                drop(guard);
+                .into_local_ffi()
             }),
         ) else {
             panic!()
         };
-        // futures.push(ch);
     }
     drop(cs);
+    // end test
 
     // set tick end to 1000
     bubble_tests::utils::set_counter(1000);
@@ -249,7 +318,7 @@ async fn async_tick(
     buffer_api: ApiHandle<dyn BasinBufferApi>,
     hashmap: HashMap<BufferId, String>,
     disk_cache: Arc<
-        Cache<BufferId, Rc<Buffer>, TestWeighter, TestBuildHasher, BufferEvictionLifeCycle>,
+        Cache<BufferId, Rc<Buffer>, TestWeighter, RapidInlineBuildHasher, BufferEvictionLifeCycle>,
     >,
 ) -> bool {
     let b = mimic_game_tick(()).await;
