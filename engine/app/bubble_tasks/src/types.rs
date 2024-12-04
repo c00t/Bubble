@@ -109,7 +109,7 @@ pub trait TaskSystemApi: Api {
     fn dispatch(
         &self,
         affinity_hint: Option<AffinityHint>,
-        fut: async_ffi::FfiFuture<()>,
+        fut_func: Box<dyn FnOnce() -> async_ffi::LocalFfiFuture<()> + Send + 'static>,
     ) -> Result<oneshot::Receiver<()>, ()>;
 
     fn dispatch_cancelable(

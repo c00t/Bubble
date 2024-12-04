@@ -331,7 +331,7 @@ impl TaskSystemApi for TaskSystem {
     fn dispatch(
         &self,
         affinity_hint: Option<AffinityHint>,
-        fut: async_ffi::FfiFuture<()>,
+        fut_func: Box<dyn FnOnce() -> async_ffi::LocalFfiFuture<()> + Send + 'static>,
     ) -> Result<oneshot::Receiver<()>, ()> {
         let guard = circ::cs();
         if affinity_hint.is_none()
@@ -347,7 +347,7 @@ impl TaskSystemApi for TaskSystem {
                 .expect("Can't get the read lock on performance dispatcher")
                 .as_ref()
                 .expect("Performance dispatcher has been shutdown or not initialized")
-                .dispatch(|| fut)
+                .dispatch(fut_func)
                 .unwrap();
             Ok(result)
         } else {
@@ -362,7 +362,7 @@ impl TaskSystemApi for TaskSystem {
                 .expect("Can't get the read lock on efficiency dispatcher")
                 .as_ref()
                 .expect("Efficiency dispatcher has been shutdown or not initialized")
-                .dispatch(|| fut)
+                .dispatch(fut_func)
                 .unwrap();
             Ok(result)
         }
@@ -618,7 +618,7 @@ impl TaskSystemApi for TaskSystem {
         };
 
         let result = self
-            .dispatch(affinity_hint, wrapped_fut.into_ffi())
+            .dispatch(affinity_hint, Box::new(|| wrapped_fut.into_local_ffi()))
             .unwrap();
         Ok((calcellation_id, result))
     }

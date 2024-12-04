@@ -9,3 +9,6 @@ pub mod types;
 pub use async_ffi;
 pub use futures_channel;
 pub use futures_util;
+
+/// A special future
+pub struct LocalFuture<T>(async_ffi::LocalFfiFuture<T>);
