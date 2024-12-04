@@ -13,6 +13,7 @@ use std::hash::{BuildHasher, Hash, Hasher};
 use std::io::Read;
 use std::num::NonZeroU64;
 use std::ops::Deref;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -85,7 +86,7 @@ pub struct BufferEvictionLifeCycle {
     data: Arc<Slab<BufferObject>>,
 }
 
-fixed_type_id_without_version_hash! {
+fixed_type_id! {
     BufferEvictionLifeCycle
 }
 
@@ -104,30 +105,37 @@ impl Lifecycle<BufferId, Rc<Buffer>> for BufferEvictionLifeCycle {
 
     fn on_evict(&self, state: &mut Self::RequestState, key: BufferId, val: Rc<Buffer>) {
         drop(val);
+        // the key might be removed from data slab before eviction by `BasinBufferApi::remove`
         let buffer_object = self.data.get(key.runtime_key()).unwrap();
-        let guard = circ::cs();
-        let mut snapshot = buffer_object.data.load(Ordering::Acquire, &guard);
-        // compare exchange until success
-        while !snapshot.is_null() {
-            if buffer_object
-                .data
-                .compare_exchange(
-                    snapshot,
-                    Rc::null(),
-                    Ordering::SeqCst,
-                    Ordering::SeqCst,
-                    &guard,
-                )
-                .is_ok()
-            {
-                break;
+        {
+            let guard = circ::cs();
+            let mut snapshot = buffer_object.data.load(Ordering::Acquire, &guard);
+            // compare exchange until success
+            while !snapshot.is_null() {
+                if buffer_object
+                    .data
+                    .compare_exchange(
+                        snapshot,
+                        Rc::null(),
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                        &guard,
+                    )
+                    .is_ok()
+                {
+                    break;
+                }
+                tracing::info!("busy evicting buffer {key:?}");
+                snapshot = buffer_object.data.load(Ordering::Acquire, &guard);
             }
-            snapshot = buffer_object.data.load(Ordering::Acquire, &guard);
-        }
-        tracing::info!("evicted buffer {key:?}");
+            tracing::info!("evicted buffer {key:?}");
+        };
     }
 }
 
+/// A lifecycle that layers multiple lifecycles.
+///
+/// TODO: delete it, because [`quick_cache`] needs [`Clone`] lifecycle when create new [`Cache`] instance.
 pub struct LayeredLifecycle {
     layers: Vec<Box<dyn Lifecycle<BufferId, Rc<Buffer>, RequestState = ()>>>,
 }
@@ -239,6 +247,33 @@ impl BufferId {
     }
 }
 
+/// The object of the buffer in the slab.
+///
+/// ## Note
+///
+/// The buffer object can only be added to [`BufferStorage`] through [`BasinBufferApi::add`],
+/// and removed by [`BasinBufferApi::remove`].
+///
+/// The internal [`Buffer`] is atomically updated by disk cache and get operations.
+///
+/// The update of [`BufferObject::hash`] and [`BufferObject::meta`] is also atomically, but
+/// separate from each other and the update of internal [`Buffer`].
+///
+/// The [`BufferObject::meta`] may be transitioned from memory to disk-backed but **not** from disk-backed to memory.
+/// Becuase it's guaranteed that when:
+///
+/// 1. From [`BufferMeta::Memory`] to [`BufferMeta::LocalStorage`]: typically a save operation, the file will
+///    be saved to disk before the [`BufferObject::meta`] is updated. And the internal [`Buffer`] will be swapped to null.
+///    So you won't read a file which is being written.
+///    
+///    Request save -1-> save done -2-> atomic update meta -3-> atomic swap buffer to null -4-> end.
+///    It's safe to get the buffer at any time, because it's read-only buffer.
+///
+/// 2. From [`BufferMeta::LocalStorage`] to [`BufferMeta::Memory`]: it's a infomation loss operation, the memory can't
+///    be reclaimed, and disk cache will decide when to evict buffer. When the disk cache evicts the buffer, it will
+///    swap the internal [`Buffer`] to null, it's not possible to look up the [`BufferObject::meta`] because it's a
+///    separate atomic operation. I think it won't happen frequently, so it's acceptable.
+///
 pub struct BufferObject {
     /// The data of the buffer.
     ///
@@ -249,16 +284,22 @@ pub struct BufferObject {
     data: AtomicRc<Buffer>,
     /// The hash of underlying data
     ///
-    /// TODO: Do we really need to calculate this if we data is huge?
+    /// TODO: Do we really need to calculate this if the data is huge?
     pub hash: AtomicU64,
-    pub meta: BufferMeta,
+    meta: AtomicRc<BufferMeta>,
+}
+
+impl BufferObject {
+    pub fn meta<'g>(&self, guard: &'g circ::Guard) -> Snapshot<'g, BufferMeta> {
+        self.meta.load(Ordering::Acquire, guard)
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum BufferMeta {
     Memory,
     LocalStorage {
-        filename: String,
+        filepath: PathBuf,
         offset: usize,
         size: Option<usize>,
     },
@@ -269,9 +310,30 @@ pub enum BufferMeta {
     },
 }
 
+unsafe impl RcObject for BufferMeta {
+    fn pop_edges(&mut self, out: &mut Vec<Rc<Self>>) {}
+}
+
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct Buffer(AlignedVec);
+
+#[derive(Debug)]
+pub struct RcBuffer(Rc<Buffer>);
+
+unsafe impl IoBuf for RcBuffer {
+    fn as_buf_ptr(&self) -> *const u8 {
+        self.0.as_ref().unwrap().0.as_ptr()
+    }
+
+    fn buf_len(&self) -> usize {
+        self.0.as_ref().unwrap().0.len()
+    }
+
+    fn buf_capacity(&self) -> usize {
+        self.0.as_ref().unwrap().0.capacity()
+    }
+}
 
 impl Deref for Buffer {
     type Target = AlignedVec;
@@ -328,7 +390,7 @@ pub enum BufferOptions {
     /// The buffer will be loaded from local storage.
     LocalStorage {
         hash: Option<u64>,
-        filename: String,
+        filepath: PathBuf,
         offset: Option<usize>,
         size: Option<usize>,
     },
@@ -380,7 +442,15 @@ pub trait BasinBufferApi: Api {
     ///   **But your metadata provided will be ignored, the existing buffer's metadata will be used.**
     fn add(&self, options: BufferOptions) -> BufferId;
 
+    /// Get the metadata of the buffer.
+    fn meta<'g>(&self, id: BufferId, guard: &'g circ::Guard) -> Option<Snapshot<'g, BufferMeta>>;
+
     /// Remove a buffer from the storage.
+    ///
+    /// ## Note
+    ///
+    /// It's not recommended to use this api to remove buffer, the buffer may be reclaimed until
+    /// the eviction callback is called.
     fn remove(&self, id: BufferId);
 
     /// Get the buffer [`circ::Rc`] from the storage, this function ensure that the buffer is loaded into memory.
@@ -394,6 +464,13 @@ pub trait BasinBufferApi: Api {
         id: BufferId,
         guard: &'g circ::Guard,
     ) -> Option<Snapshot<'g, Buffer>>;
+
+    /// Convert the buffer to local storage buffer.
+    fn to_local_storage(
+        &self,
+        id: BufferId,
+        filename: PathBuf,
+    ) -> Result<oneshot::Receiver<Result<(), std::io::Error>>, std::io::Error>;
 
     /// Get the buffer from the storage, this function return a channel that will receive the handler to the buffer.
     fn get_async(&self, id: BufferId) -> Result<BufferAsyncResult, ()>;
@@ -436,7 +513,6 @@ where
         + 'static,
 {
     fn add(&self, options: BufferOptions) -> BufferId {
-        tracing::info!("Adding buffer with options: {:?}", options);
         match options {
             BufferOptions::Memory { hash, data } => {
                 tracing::debug!("Adding memory buffer");
@@ -452,7 +528,7 @@ where
                     .insert(BufferObject {
                         data: AtomicRc::new(Buffer(data)),
                         hash: AtomicU64::new(hash),
-                        meta: BufferMeta::Memory,
+                        meta: AtomicRc::new(BufferMeta::Memory),
                     })
                     .expect("Failed to insert buffer into slab");
                 tracing::info!("Memory buffer added with runtime ID: {:?}", runtime_id);
@@ -461,7 +537,7 @@ where
             }
             BufferOptions::LocalStorage {
                 hash,
-                filename,
+                filepath,
                 offset,
                 size,
             } => {
@@ -472,11 +548,11 @@ where
                     .insert(BufferObject {
                         data: AtomicRc::null(),
                         hash: AtomicU64::new(hash.unwrap_or_default()),
-                        meta: BufferMeta::LocalStorage {
-                            filename,
+                        meta: AtomicRc::new(BufferMeta::LocalStorage {
+                            filepath,
                             offset: offset.unwrap_or(0),
                             size,
-                        },
+                        }),
                     })
                     .expect("Failed to insert buffer into slab");
                 tracing::info!(
@@ -499,16 +575,35 @@ where
         }
     }
 
+    fn meta<'g>(&self, id: BufferId, guard: &'g circ::Guard) -> Option<Snapshot<'g, BufferMeta>> {
+        Some(
+            self.data
+                .get(id.runtime_key())?
+                .meta
+                .load(Ordering::Acquire, guard),
+        )
+    }
+
     fn remove(&self, id: BufferId) {
         tracing::info!("Removing buffer with ID: {:?}", id);
+        // Note: the id has generation field, so it's safe to remove them step by step.
+        //
+        // only remove from slab, the disk cache will be removed when the corresponding disk-backed buffer evicted.
         self.data.remove(id.runtime_key());
+        // the remove operation won't call on eviction callback.
+        // let _ = self.disk_cache.remove(&id);
     }
 
     fn get(&self, id: BufferId) -> Option<Rc<Buffer>> {
         tracing::info!("Getting buffer with ID: {:?}", id);
         // 1. get the type of this buffer.
         let buffer_object = self.data.get(id.runtime_key())?;
-        match &buffer_object.meta {
+        let meta = {
+            let guard = circ::cs();
+            let snapshot = buffer_object.meta(&guard);
+            snapshot.as_ref().unwrap().clone()
+        };
+        match &meta {
             BufferMeta::Memory => {
                 tracing::debug!("Buffer is a memory buffer");
                 // 2. If it's memory buffer, it should be already loaded into memory.
@@ -519,7 +614,7 @@ where
                 Some(snapshot.counted())
             }
             BufferMeta::LocalStorage {
-                filename,
+                filepath,
                 offset,
                 size,
             } => {
@@ -545,8 +640,8 @@ where
                     }
                 }
                 // 2.2 If not, we need to load it from local storage.
-                tracing::info!("Loading buffer from local storage: {:?}", filename);
-                let mut file = std::fs::File::open(filename).unwrap();
+                tracing::info!("Loading buffer from local storage: {:?}", filepath);
+                let mut file = std::fs::File::open(filepath).unwrap();
 
                 // If size is not provided, and the offset is 0, we can just use the whole file to create aligned buffer.
                 // TODO: the size of the file may be stored into meta if the size is unknown before.
@@ -627,17 +722,25 @@ where
         tracing::info!("Getting snapshot for buffer with ID: {:?}", id);
         // 1. get the type of this buffer.
         let buffer_object = self.data.get(id.runtime_key())?;
-        match &buffer_object.meta {
+        let meta = {
+            let cs = circ::cs();
+            let snapshot = buffer_object.meta(&cs);
+            snapshot.as_ref().unwrap().clone()
+        };
+        match &meta {
             BufferMeta::Memory => {
                 tracing::debug!("Buffer is a memory buffer");
                 // 2. If it's memory buffer, it should be already loaded into memory.
                 let snapshot = buffer_object.data.load(Ordering::Acquire, guard);
                 assert!(!snapshot.is_null());
-                tracing::info!("Memory buffer snapshot retrieved successfully");
+                tracing::info!(
+                    "Memory buffer snapshot retrieved successfully, size: {}",
+                    snapshot.as_ref().unwrap().len()
+                );
                 Some(snapshot)
             }
             BufferMeta::LocalStorage {
-                filename,
+                filepath,
                 offset,
                 size,
             } => {
@@ -646,12 +749,15 @@ where
                 // 2.1 We need to check if it's already loaded
                 let snapshot = buffer_object.data.load(Ordering::Acquire, guard);
                 if !snapshot.is_null() {
-                    tracing::info!("Local storage buffer already loaded");
+                    tracing::info!(
+                        "Local storage buffer already loaded, size: {}",
+                        snapshot.as_ref().unwrap().len()
+                    );
                     return Some(snapshot);
                 }
                 // 2.2 If not, we need to load it from local storage.
-                tracing::info!("Loading buffer from local storage: {:?}", filename);
-                let mut file = std::fs::File::open(filename).unwrap();
+                tracing::info!("Loading buffer from local storage: {:?}", filepath);
+                let mut file = std::fs::File::open(filepath).unwrap();
 
                 let (buffer, size) = match (size, offset) {
                     (None, 0) => {
@@ -673,6 +779,11 @@ where
                         (buffer, len)
                     }
                 };
+                tracing::info!(
+                    "Buffer loaded from local storage with size: ({}, {})",
+                    buffer.len(),
+                    size
+                );
 
                 let buffer = Rc::new(Buffer(buffer));
                 // 2.3 Atomically set the buffer into the slab.
@@ -712,7 +823,12 @@ where
     fn get_async(&self, id: BufferId) -> Result<BufferAsyncResult, ()> {
         tracing::info!("Getting buffer asynchronously with ID: {:?}", id);
         let buffer_object = self.data.get(id.runtime_key()).ok_or(())?;
-        match buffer_object.meta.clone() {
+        let meta = {
+            let guard = circ::cs();
+            let snapshot = buffer_object.meta(&guard);
+            snapshot.as_ref().unwrap().clone()
+        };
+        match meta {
             BufferMeta::Memory => {
                 tracing::debug!("Buffer is a memory buffer");
                 let guard = circ::cs();
@@ -721,7 +837,7 @@ where
                 Ok(BufferAsyncResult::Loaded(buffer.counted()))
             }
             BufferMeta::LocalStorage {
-                filename,
+                filepath,
                 offset,
                 size,
             } => {
@@ -744,18 +860,18 @@ where
                 // 2. If not, we need to load it from local storage.
                 tracing::info!(
                     "Loading buffer from local storage asynchronously: {:?}",
-                    filename
+                    filepath
                 );
                 let (sender, receiver) = oneshot::channel();
 
                 let guard = circ::cs();
                 let task_system_api = self.task_system.get(&guard).ok_or(())?;
-                let filename = filename.clone();
+                let filepath = filepath.clone();
                 let data_slab = Arc::clone(&self.data);
                 let disk_cache = self.disk_cache.clone();
                 task_system_api.spawn_detached(
                     async move {
-                        let file = bubble_tasks::fs::File::open(filename).await.unwrap();
+                        let file = bubble_tasks::fs::File::open(filepath).await.unwrap();
                         let size = size.unwrap_or(file.metadata().await.unwrap().len() as usize);
                         let file_buffer = Buffer(AlignedVec::with_capacity(size));
                         let (_, buffer) = file
@@ -802,6 +918,111 @@ where
         }
     }
 
+    fn to_local_storage(
+        &self,
+        id: BufferId,
+        filepath: PathBuf,
+    ) -> Result<oneshot::Receiver<Result<(), std::io::Error>>, std::io::Error> {
+        // Request save -1-> save done -2-> atomic update meta -3-> atomic swap buffer to null -4-> end.
+        // 1. get meta, and object data
+        let buffer_object = self.data.get(id.runtime_key()).unwrap();
+        let meta = {
+            let guard = circ::cs();
+            let snapshot = self.data.get(id.runtime_key()).unwrap().meta(&guard);
+            snapshot.as_ref().unwrap().clone()
+        };
+        match meta {
+            BufferMeta::Memory => {
+                tracing::info!("Persisting memory buffer to local storage: {:?}", filepath);
+                // 2. create a temp file, get its path
+                let temp_file_path = tempfile::NamedTempFile::new()?.into_temp_path();
+                // 3. write the buffer to the file
+                let guard = circ::cs();
+                let buffer = self.get(id).unwrap();
+                let task_system_api = self.task_system.get(&guard).expect("Task system not found");
+                let data_slab = Arc::clone(&self.data);
+                let disk_cache = self.disk_cache.clone();
+                let (sender, receiver) = oneshot::channel();
+                task_system_api.spawn_detached(
+                    async move {
+                        let buffer = buffer;
+                        let temp_file_path = temp_file_path;
+                        // 4. write the buffer to the file
+                        bubble_tasks::fs::write(&temp_file_path, RcBuffer(buffer.clone()))
+                            .await
+                            .unwrap();
+                        // 5. persist the file to the target path
+                        match temp_file_path.persist_noclobber(&filepath) {
+                            Ok(_) => {
+                                // 6. successfully atomic replace the file,
+                                //    update the meta
+                                tracing::info!(
+                                    "Successfully atomic replace the file: {:?}",
+                                    filepath
+                                );
+                                let guard = circ::cs();
+                                let buffer_object = data_slab.get(id.runtime_key()).unwrap();
+                                let mut new_meta = Rc::new(BufferMeta::LocalStorage {
+                                    filepath,
+                                    offset: 0,
+                                    size: Some(buffer.as_ref().unwrap().len()),
+                                });
+                                let mut meta_snapshot =
+                                    buffer_object.meta.load(Ordering::Acquire, &guard);
+                                while let Err(e) = buffer_object.meta.compare_exchange(
+                                    meta_snapshot,
+                                    new_meta,
+                                    Ordering::SeqCst,
+                                    Ordering::SeqCst,
+                                    &guard,
+                                ) {
+                                    new_meta = e.desired;
+                                    meta_snapshot =
+                                        buffer_object.meta.load(Ordering::Acquire, &guard);
+                                }
+                                // 7. swap the buffer to null
+                                // buffer_object
+                                //     .data
+                                //     .store(Rc::null(), Ordering::Release, &guard);
+                                // 8. add to disk cache
+                                disk_cache.insert(id, buffer.clone());
+                                // 9. send complete signal
+                                sender.send(Ok(())).unwrap();
+                            }
+                            e => {
+                                tracing::error!("Failed to persist file: {:?}", filepath);
+                                sender
+                                    .send(e.map_err(|_| {
+                                        std::io::Error::new(
+                                            std::io::ErrorKind::Other,
+                                            "Failed to persist file",
+                                        )
+                                    }))
+                                    .unwrap();
+                            }
+                        }
+                    }
+                    .into_local_ffi(),
+                );
+
+                return Ok(receiver);
+            }
+            BufferMeta::LocalStorage { .. } => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Already in local storage",
+                ));
+            }
+            BufferMeta::Url { .. } => {
+                tracing::warn!("URL buffer is not supported yet");
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "URL buffer is not supported yet",
+                ));
+            }
+        }
+    }
+
     fn buffer_size(&self, id: BufferId) -> Option<usize> {
         tracing::info!("Getting buffer size for ID: {:?}", id);
         // 1. Get the buffer object from the data slab using the runtime key.
@@ -842,21 +1063,26 @@ where
             // Only proceed if buffer isn't already loaded
             let guard = circ::cs();
             if buffer_object.data.load(Ordering::Acquire, &guard).is_null() {
-                match buffer_object.meta.clone() {
+                let meta = {
+                    let guard = circ::cs();
+                    let snapshot = buffer_object.meta(&guard);
+                    snapshot.as_ref().unwrap().clone()
+                };
+                match meta {
                     BufferMeta::Memory => {
                         tracing::debug!("Buffer is a memory buffer, already loaded");
                     }
                     BufferMeta::LocalStorage {
-                        filename,
+                        filepath,
                         offset,
                         size,
                     } => {
                         tracing::info!(
                             "Loading buffer from local storage asynchronously: {:?}",
-                            filename
+                            filepath
                         );
                         // Spawn a task to load the file asynchronously
-                        let filename = filename.clone();
+                        let filepath = filepath.clone();
                         let guard = circ::cs();
                         let task_system =
                             self.task_system.get(&guard).expect("Task system not found");
@@ -869,7 +1095,7 @@ where
                                 let buffer = {
                                     // Load file in task
                                     let file =
-                                        bubble_tasks::fs::File::open(filename).await.unwrap();
+                                        bubble_tasks::fs::File::open(filepath).await.unwrap();
                                     let file_buffer =
                                         Buffer(AlignedVec::with_capacity(
                                             size.unwrap_or(
@@ -947,8 +1173,10 @@ where
             .data
             .get(id.runtime_key())
             .map(|buffer_object| {
+                let guard = circ::cs();
+                let meta = buffer_object.meta(&guard);
                 matches!(
-                    buffer_object.meta,
+                    meta.as_ref().unwrap(),
                     BufferMeta::LocalStorage { .. } | BufferMeta::Url { .. }
                 )
             })

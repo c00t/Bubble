@@ -7,9 +7,7 @@ use std::{
 
 use bubble_core::{
     api::{
-        api_registry_api::get_api_registry_api,
-        plugin_api::PluginApi,
-        prelude::{ApiHandle, ApiRegistryApi},
+        api_registry_api::get_api_registry_api, plugin_api::PluginApi, prelude::{ApiHandle, ApiRegistryApi}, Api, ApiConstant
     },
     sync::circ,
     tracing,
@@ -102,6 +100,12 @@ impl TestSkeleton {
                 }
             })
             .unwrap()
+    }
+
+    pub fn add_api_to_registry<T: ApiConstant + Api + ?Sized>(&self, api: ApiHandle<T>) {
+        let guard = circ::cs();
+        let local_api_registry_api = self.api_registry_api.get(&guard).unwrap();
+        local_api_registry_api.local_set(api, None);
     }
 
     pub fn end_test(&self) {
