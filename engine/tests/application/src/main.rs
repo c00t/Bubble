@@ -110,27 +110,30 @@ pub fn test_bubble_tasks(
     let start = std::time::Instant::now();
     let r = task_system_api.get(&guard).unwrap().dispatch(
         None,
-        async move {
-            println!(
-                "(StdId)main_thread(dispatch): {:?}",
-                std::thread::current().id()
-            );
-            println!("(SysId)main_thread(dispatch): {:?}", SysThreadId::current());
-            println!(
-                "(StdName)main_thread(dispatch): {:?}",
-                std::thread::current().name()
-            );
-            println!("(RuntimeName)main_thread(dispatch): {:?}", Runtime::name());
+        Box::new(|| {
+            async move {
+                println!(
+                    "(StdId)main_thread(dispatch): {:?}",
+                    std::thread::current().id()
+                );
+                println!("(SysId)main_thread(dispatch): {:?}", SysThreadId::current());
+                println!(
+                    "(StdName)main_thread(dispatch): {:?}",
+                    std::thread::current().name()
+                );
+                println!("(RuntimeName)main_thread(dispatch): {:?}", Runtime::name());
 
-            let x =
-                bubble_tasks::runtime::spawn(container_clone.plugin_task("Cargo.toml".to_string()));
-            let (x, _) = futures_util::join!(
-                x,
-                bubble_tasks::runtime::time::sleep(std::time::Duration::from_secs(10))
-            );
-            println!("{:?}", x);
-        }
-        .into_ffi(),
+                let x = bubble_tasks::runtime::spawn(
+                    container_clone.plugin_task("Cargo.toml".to_string()),
+                );
+                let (x, _) = futures_util::join!(
+                    x,
+                    bubble_tasks::runtime::time::sleep(std::time::Duration::from_secs(10))
+                );
+                println!("{:?}", x);
+            }
+            .into_local_ffi()
+        }),
     );
 
     let runtime = Runtime::new().unwrap();
@@ -246,7 +249,10 @@ fn main() {
     let task_system_api = {
         let guard = circ::cs();
         let api = bubble_tasks::task_system_api::get_task_system_api_default();
-        api_registry_api.get(&guard).expect("Failed to get API registry api").local_set(api, None)
+        api_registry_api
+            .get(&guard)
+            .expect("Failed to get API registry api")
+            .local_set(api, None)
     };
     // let task_system_api =
     //     bubble_tasks::task_system_api::register_task_system_api(&api_registry_api, None); // task: strong count 4
@@ -254,7 +260,10 @@ fn main() {
     let plugin_api = {
         let guard = circ::cs();
         let api = bubble_core::api::plugin_api::get_default_plugin_api();
-        api_registry_api.get(&guard).expect("Failed to get API registry api").local_set(api, None)
+        api_registry_api
+            .get(&guard)
+            .expect("Failed to get API registry api")
+            .local_set(api, None)
     };
     let hot_reload_test_api = api_registry_api
         .get(&guard)

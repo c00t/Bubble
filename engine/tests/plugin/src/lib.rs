@@ -180,39 +180,42 @@ async fn plugin_task(s: String) -> String {
                     task_system_api
                         .dispatch(
                             None,
-                            async move {
-                                // info!("plugin_thread(loop{})", i);
-                                // let filename = format!("test0.txt");
-                                // let file = bubble_tasks::fs::File::open(filename).await.unwrap();
-                                // let (read, buffer) = file
-                                //     .read_to_end_at(Vec::with_capacity(1024), 0)
-                                //     .await
-                                //     .unwrap();
-                                // assert_eq!(read, buffer.len());
-                                // print thread id
-                                println!(
-                                    "(StdId)plugin_thread(loop{}): {:?}",
-                                    i,
-                                    std::thread::current().id()
-                                );
-                                bubble_tasks::runtime::time::sleep(Duration::from_secs(2)).await;
-                                println!(
-                                    "(SysId)plugin_thread(loop{}): {:?}",
-                                    i,
-                                    SysThreadId::current()
-                                );
-                                println!(
-                                    "(StdName)plugin_thread(loop{}): {:?}",
-                                    i,
-                                    std::thread::current().name()
-                                );
-                                println!(
-                                    "(RuntimeName)plugin_thread(loop{}): {:?}",
-                                    i,
-                                    Runtime::name()
-                                );
-                            }
-                            .into_ffi(),
+                            Box::new(move || {
+                                async move {
+                                    // info!("plugin_thread(loop{})", i);
+                                    // let filename = format!("test0.txt");
+                                    // let file = bubble_tasks::fs::File::open(filename).await.unwrap();
+                                    // let (read, buffer) = file
+                                    //     .read_to_end_at(Vec::with_capacity(1024), 0)
+                                    //     .await
+                                    //     .unwrap();
+                                    // assert_eq!(read, buffer.len());
+                                    // print thread id
+                                    println!(
+                                        "(StdId)plugin_thread(loop{}): {:?}",
+                                        i,
+                                        std::thread::current().id()
+                                    );
+                                    bubble_tasks::runtime::time::sleep(Duration::from_secs(2))
+                                        .await;
+                                    println!(
+                                        "(SysId)plugin_thread(loop{}): {:?}",
+                                        i,
+                                        SysThreadId::current()
+                                    );
+                                    println!(
+                                        "(StdName)plugin_thread(loop{}): {:?}",
+                                        i,
+                                        std::thread::current().name()
+                                    );
+                                    println!(
+                                        "(RuntimeName)plugin_thread(loop{}): {:?}",
+                                        i,
+                                        Runtime::name()
+                                    );
+                                }
+                                .into_local_ffi()
+                            }),
                         )
                         .unwrap(),
                 );
