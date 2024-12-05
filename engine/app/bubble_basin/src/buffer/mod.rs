@@ -30,7 +30,7 @@ use bubble_tasks::types::DynTaskSystemApi;
 use circ::{Rc, Snapshot};
 use circ_ds::concurrent_map::OutputHolder;
 use circ_ds::natarajan_mittal_tree::NMTreeMap;
-use quick_cache::sync::Cache;
+use quick_cache::sync::{Cache, GuardResult};
 use quick_cache::{DefaultHashBuilder, Lifecycle, Weighter};
 pub use rkyv::util::AlignedVec;
 use sharded_slab::Slab;
@@ -605,12 +605,12 @@ where
         };
         match &meta {
             BufferMeta::Memory => {
-                tracing::debug!("Buffer is a memory buffer");
+                tracing::debug!("Buffer {:?} is a memory buffer", id);
                 // 2. If it's memory buffer, it should be already loaded into memory.
                 let guard = circ::cs();
                 let snapshot = buffer_object.data.load(Ordering::Acquire, &guard);
                 assert!(!snapshot.is_null());
-                tracing::info!("Memory buffer retrieved successfully");
+                tracing::info!("Memory buffer {:?} retrieved successfully", id);
                 Some(snapshot.counted())
             }
             BufferMeta::LocalStorage {
@@ -618,29 +618,38 @@ where
                 offset,
                 size,
             } => {
-                tracing::debug!("Buffer is a local storage buffer");
+                tracing::debug!("Buffer {:?} is a local storage buffer", id);
                 // 2. If it's local storage buffer
                 // 2.1 We need to check if it's already loaded
 
-                // // First check disk cache
-                // // Note: Don't do this, it will create massive memory usage
-                // // when eviction is triggered frequently.
+                // First check disk cache
+                // Note: It's a must operation, because the eviction rely on the cache get operation.
                 // if let Some(buffer) = self.disk_cache.get(&id) {
-                //     tracing::info!("Local storage buffer found in disk cache");
+                //     tracing::info!("Local storage buffer {:?} found in disk cache", id);
                 //     return Some(buffer);
                 // }
-
-                // Then check if loaded in memory between the disk cache check and the memory check.
-                {
-                    let guard = circ::cs();
-                    let snapshot = buffer_object.data.load(Ordering::Acquire, &guard);
-                    if !snapshot.is_null() {
-                        tracing::info!("Local storage buffer already loaded in memory");
-                        return Some(snapshot.counted());
+                // If we can't get the Buffer from cache, and block here, it means that the buffer is already being loading by other thread.
+                // So we can't be faster than that thread.
+                let cache_guard = match self.disk_cache.get_value_or_guard(&id, None) {
+                    GuardResult::Value(buffer) => {
+                        tracing::info!("Local storage buffer {:?} found in disk cache", id);
+                        return Some(buffer);
                     }
-                }
+                    GuardResult::Guard(guard) => guard,
+                    _ => unreachable!(),
+                };
+
+                // // Then check if loaded in memory between the disk cache check and the memory check.
+                // {
+                //     let guard = circ::cs();
+                //     let snapshot = buffer_object.data.load(Ordering::Acquire, &guard);
+                //     if !snapshot.is_null() {
+                //         tracing::info!("Local storage buffer {:?} already loaded in memory", id);
+                //         return Some(snapshot.counted());
+                //     }
+                // }
                 // 2.2 If not, we need to load it from local storage.
-                tracing::info!("Loading buffer from local storage: {:?}", filepath);
+                tracing::info!("Loading buffer {:?} from local storage: {:?}", id, filepath);
                 let mut file = std::fs::File::open(filepath).unwrap();
 
                 // If size is not provided, and the offset is 0, we can just use the whole file to create aligned buffer.
@@ -668,7 +677,12 @@ where
                         (buffer, len)
                     }
                 };
-                tracing::info!("Buffer loaded with size: {},{}", buffer.len(), size);
+                tracing::info!(
+                    "Buffer {:?} loaded with size: {},{}",
+                    id,
+                    buffer.len(),
+                    size
+                );
 
                 // 2.3 Get the hash of the buffer.
                 let hash = {
@@ -690,19 +704,19 @@ where
                     &guard,
                 ) {
                     Ok(_) => {
-                        tracing::info!("Local storage buffer loaded by current thread");
+                        tracing::info!("Local storage buffer {:?} loaded by current thread", id);
                         // 2.6 Store into disk cache.
-                        self.disk_cache.insert(id, buffer.clone());
-                        tracing::info!("Local storage buffer loaded and cached");
+                        cache_guard.insert(buffer.clone()).unwrap();
+                        tracing::info!("Local storage buffer {:?} loaded and cached", id);
                         // 2.7 Return the buffer.
                         Some(buffer)
                     }
                     Err(e) => {
+                        tracing::warn!("Local storage buffer {:?} already loaded by other thread, but it shouldn't happended", id);
                         drop(e);
                         drop(buffer);
                         // 2.8 If the buffer is already loaded by other thread, no need to set it again.
                         let snapshot = buffer_object.data.load(Ordering::Acquire, &guard);
-                        tracing::info!("Local storage buffer already loaded by other thread.");
                         Some(snapshot.counted())
                     }
                 }
@@ -729,12 +743,13 @@ where
         };
         match &meta {
             BufferMeta::Memory => {
-                tracing::debug!("Buffer is a memory buffer");
+                tracing::debug!("Buffer {:?} is a memory buffer", id);
                 // 2. If it's memory buffer, it should be already loaded into memory.
                 let snapshot = buffer_object.data.load(Ordering::Acquire, guard);
                 assert!(!snapshot.is_null());
                 tracing::info!(
-                    "Memory buffer snapshot retrieved successfully, size: {}",
+                    "Memory buffer {:?} snapshot retrieved successfully, size: {}",
+                    id,
                     snapshot.as_ref().unwrap().len()
                 );
                 Some(snapshot)
@@ -744,19 +759,32 @@ where
                 offset,
                 size,
             } => {
-                tracing::debug!("Buffer is a local storage buffer");
+                tracing::debug!("Buffer {:?} is a local storage buffer", id);
                 // 2. If it's local storage buffer
-                // 2.1 We need to check if it's already loaded
-                let snapshot = buffer_object.data.load(Ordering::Acquire, guard);
-                if !snapshot.is_null() {
-                    tracing::info!(
-                        "Local storage buffer already loaded, size: {}",
-                        snapshot.as_ref().unwrap().len()
-                    );
-                    return Some(snapshot);
-                }
+                // 2.1 First check disk cache
+                // if let Some(buffer) = self.disk_cache.get(&id) {
+                //     tracing::info!("Local storage buffer {:?} found in disk cache", id);
+                //     return Some(buffer.snapshot(guard));
+                // }
+                let cache_guard = match self.disk_cache.get_value_or_guard(&id, None) {
+                    GuardResult::Value(buffer) => {
+                        return Some(buffer.snapshot(guard));
+                    }
+                    GuardResult::Guard(guard) => guard,
+                    _ => unreachable!(),
+                };
+                // 2.2 Then check if it's already loaded
+                // let snapshot = buffer_object.data.load(Ordering::Acquire, guard);
+                // if !snapshot.is_null() {
+                //     tracing::info!(
+                //         "Local storage buffer {:?} already loaded, size: {}",
+                //         id,
+                //         snapshot.as_ref().unwrap().len()
+                //     );
+                //     return Some(snapshot);
+                // }
                 // 2.2 If not, we need to load it from local storage.
-                tracing::info!("Loading buffer from local storage: {:?}", filepath);
+                tracing::info!("Loading buffer {:?} from local storage: {:?}", id, filepath);
                 let mut file = std::fs::File::open(filepath).unwrap();
 
                 let (buffer, size) = match (size, offset) {
@@ -780,7 +808,8 @@ where
                     }
                 };
                 tracing::info!(
-                    "Buffer loaded from local storage with size: ({}, {})",
+                    "Buffer {:?} loaded from local storage with size: ({}, {})",
+                    id,
                     buffer.len(),
                     size
                 );
@@ -796,18 +825,17 @@ where
                     guard,
                 ) {
                     Ok(_) => {
-                        tracing::info!("Local storage buffer loaded by current thread");
+                        tracing::info!("Local storage buffer {:?} loaded by current thread", id);
                         // 2.4 Store into disk cache.
-                        self.disk_cache.insert(id, buffer.clone());
-                        tracing::info!("Local storage buffer loaded and cached");
+                        cache_guard.insert(buffer.clone()).unwrap();
+                        tracing::info!("Local storage buffer {:?} loaded and cached", id);
                         // 2.5 Return the buffer.
-                        let snapshot = buffer_object.data.load(Ordering::Acquire, guard);
-                        Some(snapshot)
+                        Some(buffer.snapshot(guard))
                     }
                     Err(e) => {
+                        tracing::warn!("Local storage buffer {:?} already loaded by other thread, but it shouldn't happended", id);
                         drop(e);
                         drop(buffer);
-                        tracing::info!("Local storage buffer already loaded by other thread.");
                         let snapshot = buffer_object.data.load(Ordering::Acquire, guard);
                         Some(snapshot)
                     }
@@ -830,10 +858,10 @@ where
         };
         match meta {
             BufferMeta::Memory => {
-                tracing::debug!("Buffer is a memory buffer");
+                tracing::debug!("Buffer {:?} is a memory buffer", id);
                 let guard = circ::cs();
                 let buffer = buffer_object.data.load(Ordering::Acquire, &guard);
-                tracing::info!("Memory buffer retrieved successfully");
+                tracing::info!("Memory buffer {:?} retrieved successfully", id);
                 Ok(BufferAsyncResult::Loaded(buffer.counted()))
             }
             BufferMeta::LocalStorage {
@@ -841,25 +869,26 @@ where
                 offset,
                 size,
             } => {
-                tracing::debug!("Buffer is a local storage buffer");
+                tracing::debug!("Buffer {:?} is a local storage buffer", id);
                 // 1. If the buffer is already loaded return it.
-                // let buffer = self.disk_cache.get(&id);
-                // if let Some(buffer) = buffer {
-                //     tracing::info!("Local storage buffer already loaded");
-                //     return Ok(BufferAsyncResult::Loaded(buffer));
-                // }
-                {
-                    let guard = circ::cs();
-                    let snapshot = buffer_object.data.load(Ordering::Acquire, &guard);
-                    if !snapshot.is_null() {
-                        tracing::info!("Local storage buffer already loaded");
-                        return Ok(BufferAsyncResult::Loaded(snapshot.counted()));
-                    }
+                if let Some(buffer) = self.disk_cache.get(&id) {
+                    tracing::info!("Local storage buffer {:?} already loaded", id);
+                    return Ok(BufferAsyncResult::Loaded(buffer));
                 }
+
+                // {
+                //     let guard = circ::cs();
+                //     let snapshot = buffer_object.data.load(Ordering::Acquire, &guard);
+                //     if !snapshot.is_null() {
+                //         tracing::info!("Local storage buffer {:?} already loaded", id);
+                //         return Ok(BufferAsyncResult::Loaded(snapshot.counted()));
+                //     }
+                // }
 
                 // 2. If not, we need to load it from local storage.
                 tracing::info!(
-                    "Loading buffer from local storage asynchronously: {:?}",
+                    "Loading buffer {:?} from local storage asynchronously: {:?}",
+                    id,
                     filepath
                 );
                 let (sender, receiver) = oneshot::channel();
@@ -871,6 +900,15 @@ where
                 let disk_cache = self.disk_cache.clone();
                 task_system_api.spawn_detached(
                     async move {
+                        let cache_guard = match disk_cache.get_value_or_guard_async(&id).await {
+                            Ok(buffer) => {
+                                sender.send(Some(buffer)).unwrap();
+                                return;
+                            }
+                            Err(guard) => {
+                                guard
+                            }
+                        };
                         let file = bubble_tasks::fs::File::open(filepath).await.unwrap();
                         let size = size.unwrap_or(file.metadata().await.unwrap().len() as usize);
                         let file_buffer = Buffer(AlignedVec::with_capacity(size));
@@ -879,6 +917,7 @@ where
                             .await
                             .unwrap();
                         let buffer = Rc::new(buffer);
+                        tracing::info!("Buffer {:?} loaded from local storage: {}", id, size);
 
                         if let Some(buffer_object) = data_slab.get(id.runtime_key()) {
                             let guard = circ::cs();
@@ -892,9 +931,10 @@ where
                                 Ok(_) => {
                                     sender.send(Some(buffer.clone())).unwrap();
                                     // Store into disk cache.
-                                    disk_cache.insert(id, buffer.clone());
+                                    cache_guard.insert(buffer.clone()).unwrap();
                                 }
                                 Err(e) => {
+                                    tracing::warn!("Local storage buffer {:?} already loaded by other thread, but it shouldn't happended", id);
                                     // already loaded
                                     drop(e);
                                     drop(buffer);

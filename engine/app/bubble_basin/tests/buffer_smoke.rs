@@ -49,7 +49,7 @@ pub fn smoke() {
     let (buffer_api, disk_cache, data_slab) = create_test_buffer_api(
         data_slab.clone(),
         10,
-        50 * 1024 * 1024,
+        80 * 1024 * 1024,
         test_skeleton.task_system_api.clone(),
         TestWeighter {},
         RapidInlineBuildHasher::default(),
@@ -59,23 +59,26 @@ pub fn smoke() {
 
     // prepare data
     let (memory_buffers, local_storage_buffers) =
-        prepare_raw_data(0, 10 * 1024 * 1024, 20, 10 * 1024 * 1024);
+        prepare_raw_data(20, 10 * 1024 * 1024, 20, 10 * 1024 * 1024);
     let spilt_point = 20;
     let buffer_options = prepare_buffer_options(memory_buffers, &local_storage_buffers);
     let buffer_ids = add_buffers_to_storage(buffer_options, buffer_api.clone());
 
-    tracing::info!("End of prepare data, total buffer count: {}", buffer_ids.len());
+    tracing::info!(
+        "End of prepare data, total buffer count: {}",
+        buffer_ids.len()
+    );
 
     // Functions Unit Test
     //
-    test_buffer_get_with_threads(buffer_api.clone(), buffer_ids);
+    // test_buffer_get_with_threads(buffer_api.clone(), buffer_ids);
     // test_buffer_get(test_skeleton.task_system_api.clone(), buffer_api.clone(), buffer_ids);
-    // test_buffer_get_snapshot(
-    //     test_skeleton.task_system_api.clone(),
-    //     buffer_api.clone(),
-    //     buffer_ids,
-    // );
-    // test_buffer_get_async(test_skeleton.task_system_api.clone(), buffer_api.clone(), buffer_ids);
+    // test_buffer_get_snapshot(test_skeleton.task_system_api.clone(),buffer_api.clone(),buffer_ids);
+    test_buffer_get_async(
+        test_skeleton.task_system_api.clone(),
+        buffer_api.clone(),
+        buffer_ids,
+    );
 
     // // simple test `local_buffer_api.to_local_storage(id, filename)`
     // for (id, _) in memory_buffer_hashmap.clone() {
@@ -523,7 +526,9 @@ fn run_async_runtime<W, H, L>(
             if COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 50 == 0 {
                 regular_log_info.clone().log();
             }
+            let guard = circ::cs();
             let break_out = mimic_game_tick(()).await;
+            guard.flush();
             break_out
         }
         .await
