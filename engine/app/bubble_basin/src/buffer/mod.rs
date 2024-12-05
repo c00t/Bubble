@@ -466,7 +466,10 @@ pub trait BasinBufferApi: Api {
     ) -> Option<Snapshot<'g, Buffer>>;
 
     /// Convert the buffer to local storage buffer.
-    fn to_local_storage(
+    fn to_local_storage(&self, id: BufferId, filepath: PathBuf) -> Result<(), std::io::Error>;
+
+    /// Convert the buffer to local storage buffer asynchronously.
+    fn to_local_storage_async(
         &self,
         id: BufferId,
         filename: PathBuf,
@@ -958,14 +961,14 @@ where
         }
     }
 
-    fn to_local_storage(
+    fn to_local_storage_async(
         &self,
         id: BufferId,
         filepath: PathBuf,
     ) -> Result<oneshot::Receiver<Result<(), std::io::Error>>, std::io::Error> {
         // Request save -1-> save done -2-> atomic update meta -3-> atomic swap buffer to null -4-> end.
         // 1. get meta, and object data
-        let buffer_object = self.data.get(id.runtime_key()).unwrap();
+        // let buffer_object = self.data.get(id.runtime_key()).unwrap();
         let meta = {
             let guard = circ::cs();
             let snapshot = self.data.get(id.runtime_key()).unwrap().meta(&guard);
@@ -973,26 +976,55 @@ where
         };
         match meta {
             BufferMeta::Memory => {
-                tracing::info!("Persisting memory buffer to local storage: {:?}", filepath);
-                // 2. create a temp file, get its path
+                tracing::info!(
+                    "Persisting memory buffer {:?} to local storage: {:?}",
+                    id,
+                    filepath
+                );
+                // 2. create a temp file, get a temp path
                 let temp_file_path = tempfile::NamedTempFile::new()?.into_temp_path();
                 // 3. write the buffer to the file
                 let guard = circ::cs();
                 let buffer = self.get(id).unwrap();
-                let task_system_api = self.task_system.get(&guard).expect("Task system not found");
+                let local_task_system_api =
+                    self.task_system.get(&guard).expect("Task system not found");
                 let data_slab = Arc::clone(&self.data);
                 let disk_cache = self.disk_cache.clone();
                 let (sender, receiver) = oneshot::channel();
-                task_system_api.spawn_detached(
+                let taks_system_api = self.task_system.clone();
+                local_task_system_api.spawn_detached(
                     async move {
                         let buffer = buffer;
                         let temp_file_path = temp_file_path;
+                        // 5. make the persistent process async atomic, it's save because this change can only happen once by 1 `to_local_storage_async` call
+                        let Err(cache_guard) = disk_cache.get_value_or_guard_async(&id).await
+                        else {
+                            sender.send(Ok(())).unwrap();
+                            return;
+                        };
                         // 4. write the buffer to the file
                         bubble_tasks::fs::write(&temp_file_path, RcBuffer(buffer.clone()))
                             .await
                             .unwrap();
-                        // 5. persist the file to the target path
-                        match temp_file_path.persist_noclobber(&filepath) {
+                        let (persist_tx, persist_rx) = oneshot::channel();
+                        let guard = circ::cs();
+                        let local_task_system_api =
+                            taks_system_api.get(&guard).expect("Task system not found");
+                        let filepath_clone = filepath.clone();
+                        let _ = local_task_system_api.dispatch_blocking(
+                            None,
+                            Box::new(move || {
+                                let result = temp_file_path.persist(&filepath_clone);
+                                persist_tx.send(result).unwrap();
+                            }),
+                        );
+
+                        // 6. persist the file to the target path, in fact the persist operation is a blocking operation
+                        //    TODO: use bubble_tasks::fs to replace this, or dispatch this function to thread pool use a sender
+                        //    to avoid blocking the async runtime.
+                        //
+                        //    It seems that `dispatch` has better performance than `dispatch_blocking`? why?
+                        match persist_rx.await.unwrap() {
                             Ok(_) => {
                                 // 6. successfully atomic replace the file,
                                 //    update the meta
@@ -1020,22 +1052,24 @@ where
                                     meta_snapshot =
                                         buffer_object.meta.load(Ordering::Acquire, &guard);
                                 }
+                                tracing::info!("Successfully updated meta for buffer {:?}", id);
                                 // 7. swap the buffer to null
                                 // buffer_object
                                 //     .data
                                 //     .store(Rc::null(), Ordering::Release, &guard);
                                 // 8. add to disk cache
-                                disk_cache.insert(id, buffer.clone());
+                                cache_guard.insert(buffer.clone()).unwrap();
+                                tracing::info!("Successfully added buffer {:?} to disk cache", id);
                                 // 9. send complete signal
                                 sender.send(Ok(())).unwrap();
                             }
                             e => {
                                 tracing::error!("Failed to persist file: {:?}", filepath);
                                 sender
-                                    .send(e.map_err(|_| {
+                                    .send(e.map_err(|e| {
                                         std::io::Error::new(
                                             std::io::ErrorKind::Other,
-                                            "Failed to persist file",
+                                            format!("Failed to persist file: {:?}", e),
                                         )
                                     }))
                                     .unwrap();
@@ -1059,6 +1093,93 @@ where
                     std::io::ErrorKind::Other,
                     "URL buffer is not supported yet",
                 ));
+            }
+        }
+    }
+
+    fn to_local_storage(&self, id: BufferId, filepath: PathBuf) -> Result<(), std::io::Error> {
+        // Request save -1-> save done -2-> atomic update meta -3-> atomic swap buffer to null -4-> end.
+        // 1. get meta, and object data
+        let meta = {
+            let guard = circ::cs();
+            let snapshot = self.data.get(id.runtime_key()).unwrap().meta(&guard);
+            snapshot.as_ref().unwrap().clone()
+        };
+        match meta {
+            BufferMeta::Memory => {
+                tracing::info!(
+                    "Persisting memory buffer {:?} to local storage: {:?}",
+                    id,
+                    filepath
+                );
+
+                // 5. make the persistent process atomic
+                let cache_guard = match self.disk_cache.get_value_or_guard(&id, None) {
+                    GuardResult::Value(_) => {
+                        return Ok(());
+                    }
+                    GuardResult::Guard(guard) => guard,
+                    _ => unreachable!(),
+                };
+                // 2. create a temp file, get a temp path
+                let temp_file_path = tempfile::NamedTempFile::new()?.into_temp_path();
+                // 3. write the buffer to the file
+                let buffer = self.get(id).unwrap();
+
+                // 4. write the buffer to the file synchronously
+                std::fs::write(&temp_file_path, &buffer.as_ref().unwrap().0)?;
+
+                // 6. persist the file to the target path
+                match temp_file_path.persist(&filepath) {
+                    Ok(_) => {
+                        // 6. successfully atomic replace the file,
+                        //    update the meta
+                        tracing::info!("Successfully atomic replace the file: {:?}", filepath);
+                        let guard = circ::cs();
+                        let buffer_object = self.data.get(id.runtime_key()).unwrap();
+                        let mut new_meta = Rc::new(BufferMeta::LocalStorage {
+                            filepath: filepath.clone(),
+                            offset: 0,
+                            size: Some(buffer.as_ref().unwrap().len()),
+                        });
+                        let mut meta_snapshot = buffer_object.meta.load(Ordering::Acquire, &guard);
+                        while let Err(e) = buffer_object.meta.compare_exchange(
+                            meta_snapshot,
+                            new_meta,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                            &guard,
+                        ) {
+                            new_meta = e.desired;
+                            meta_snapshot = buffer_object.meta.load(Ordering::Acquire, &guard);
+                        }
+                        tracing::info!("Successfully updated meta for buffer {:?}", id);
+
+                        // 7. add to disk cache
+                        cache_guard.insert(buffer.clone()).unwrap();
+                        tracing::info!("Successfully added buffer {:?} to disk cache", id);
+
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to persist file: {:?}", filepath);
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("Failed to persist file: {:?}", e),
+                        ))
+                    }
+                }
+            }
+            BufferMeta::LocalStorage { .. } => Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Already in local storage",
+            )),
+            BufferMeta::Url { .. } => {
+                tracing::warn!("URL buffer is not supported yet");
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "URL buffer is not supported yet",
+                ))
             }
         }
     }

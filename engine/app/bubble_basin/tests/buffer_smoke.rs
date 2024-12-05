@@ -49,7 +49,7 @@ pub fn smoke() {
     let (buffer_api, disk_cache, data_slab) = create_test_buffer_api(
         data_slab.clone(),
         10,
-        80 * 1024 * 1024,
+        160 * 1024 * 1024,
         test_skeleton.task_system_api.clone(),
         TestWeighter {},
         RapidInlineBuildHasher::default(),
@@ -70,43 +70,56 @@ pub fn smoke() {
     );
 
     // Functions Unit Test
-    //
+
     // test_buffer_get_with_threads(buffer_api.clone(), buffer_ids);
-    // test_buffer_get(test_skeleton.task_system_api.clone(), buffer_api.clone(), buffer_ids);
-    // test_buffer_get_snapshot(test_skeleton.task_system_api.clone(),buffer_api.clone(),buffer_ids);
-    test_buffer_get_async(
-        test_skeleton.task_system_api.clone(),
-        buffer_api.clone(),
-        buffer_ids,
-    );
 
-    // // simple test `local_buffer_api.to_local_storage(id, filename)`
-    // for (id, _) in memory_buffer_hashmap.clone() {
-    //     let buffer_api_clone = buffer_api.clone();
-    //     let temp_path = NamedTempFile::new().unwrap().into_temp_path();
-    //     let _ = local_task_system_api.dispatch(
-    //         None,
-    //         Box::new(move || {
-    //             async move {
-    //                 let mut guard = circ::cs();
-    //                 let local_buffer_api = buffer_api_clone.get(&guard).unwrap();
-    //                 let ch = local_buffer_api
-    //                     .to_local_storage(id, temp_path.to_path_buf())
-    //                     .unwrap();
-    //                 guard.reactivate();
-    //                 guard.flush();
-    //                 drop(guard);
-    //             }
-    //             .into_local_ffi()
-    //         }),
+    // test_buffer_get(
+    //     test_skeleton.task_system_api.clone(),
+    //     buffer_api.clone(),
+    //     buffer_ids,
+    // );
+
+    // test_buffer_get_snapshot(
+    //     test_skeleton.task_system_api.clone(),
+    //     buffer_api.clone(),
+    //     buffer_ids,
+    // );
+
+    // test_buffer_get_async(
+    //     test_skeleton.task_system_api.clone(),
+    //     buffer_api.clone(),
+    //     buffer_ids,
+    // );
+
+    let _temps = {
+        // 1. move from memory to local storage
+        let temp_paths = test_to_local_storage_async(
+            test_skeleton.task_system_api.clone(),
+            buffer_api.clone(),
+            buffer_ids.clone(),
+        );
+        // 2. test buffer get async
+        test_buffer_get_async(
+            test_skeleton.task_system_api.clone(),
+            buffer_api.clone(),
+            buffer_ids,
+        );
+        temp_paths
+    };
+
+    // let _temps2 = {
+    //     let temp_paths = test_to_local_storage(
+    //         test_skeleton.task_system_api.clone(),
+    //         buffer_api.clone(),
+    //         buffer_ids.clone(),
     //     );
-    // }
-    // drop(cs);
-    // // end test
-
-    let guard = circ::cs();
-    guard.flush();
-    drop(guard);
+    //     test_buffer_get_async(
+    //         test_skeleton.task_system_api.clone(),
+    //         buffer_api.clone(),
+    //         buffer_ids,
+    //     );
+    //     temp_paths
+    // };
 
     // set tick end to 1000
     bubble_tests::utils::set_counter(1000);
@@ -244,6 +257,96 @@ fn prepare_buffer_options(
     }
 
     buffer_options
+}
+
+/// the temp paths should be returned to prevent the temp file from being deleted
+fn test_to_local_storage_async(
+    task_system_api: ApiHandle<dyn TaskSystemApi>,
+    buffer_api: ApiHandle<dyn BasinBufferApi>,
+    buffer_ids: Vec<BufferId>,
+) -> Vec<TempPath> {
+    let guard = circ::cs();
+    let local_task_system_api = task_system_api.get(&guard).unwrap();
+    let mut rng = rand::thread_rng();
+    let mut shuffle_buffer_ids = buffer_ids.clone();
+    shuffle_buffer_ids.shuffle(&mut rng);
+
+    let mut temp_paths = Vec::new();
+    for id in shuffle_buffer_ids {
+        let buffer_api_clone = buffer_api.clone();
+        let temp_path = NamedTempFile::new_in("./").unwrap().into_temp_path();
+        let temp_path_pathbuf = temp_path.to_path_buf();
+        temp_paths.push(temp_path);
+        let Ok(_) = local_task_system_api.dispatch(
+            None,
+            Box::new(move || {
+                async move {
+                    let mut guard = circ::cs();
+                    let local_buffer_api = buffer_api_clone.get(&guard).unwrap();
+                    match local_buffer_api.to_local_storage_async(id, temp_path_pathbuf) {
+                        Ok(ch) => {
+                            // ch is the channel for the async operation
+                            // We don't need to await it as it's a fire-and-forget operation
+                            let _ = ch.await.unwrap();
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to convert buffer to local storage: {:?}", e);
+                        }
+                    }
+                    guard.reactivate();
+                    guard.flush();
+                    drop(guard);
+                }
+                .into_local_ffi()
+            }),
+        ) else {
+            panic!()
+        };
+    }
+    temp_paths
+}
+
+/// Test synchronous to_local_storage
+/// The temp paths should be returned to prevent the temp file from being deleted
+fn test_to_local_storage(
+    task_system_api: ApiHandle<dyn TaskSystemApi>,
+    buffer_api: ApiHandle<dyn BasinBufferApi>,
+    buffer_ids: Vec<BufferId>,
+) -> Vec<TempPath> {
+    let guard = circ::cs();
+    let local_task_system_api = task_system_api.get(&guard).unwrap();
+    let mut rng = rand::thread_rng();
+    let mut shuffle_buffer_ids = buffer_ids.clone();
+    shuffle_buffer_ids.shuffle(&mut rng);
+
+    let mut temp_paths = Vec::new();
+    for id in shuffle_buffer_ids {
+        let buffer_api_clone = buffer_api.clone();
+        let temp_path = NamedTempFile::new_in("./").unwrap().into_temp_path();
+        let temp_path_pathbuf = temp_path.to_path_buf();
+        temp_paths.push(temp_path);
+        let Ok(_) = local_task_system_api.dispatch_blocking(
+            None,
+            Box::new(move || {
+                let mut guard = circ::cs();
+                let local_buffer_api = buffer_api_clone.get(&guard).unwrap();
+                match local_buffer_api.to_local_storage(id, temp_path_pathbuf) {
+                    Ok(()) => {
+                        tracing::info!("Successfully converted buffer to local storage");
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to convert buffer to local storage: {:?}", e);
+                    }
+                }
+                guard.reactivate();
+                guard.flush();
+                drop(guard);
+            }),
+        ) else {
+            panic!()
+        };
+    }
+    temp_paths
 }
 
 /// Add all buffers into buffer storage
