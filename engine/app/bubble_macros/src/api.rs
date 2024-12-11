@@ -4,7 +4,7 @@ use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
     punctuated::Punctuated,
-    DeriveInput, ExprTuple, FnArg, Ident, ItemTrait, Path, Token, TraitItem,LitBool,
+    DeriveInput, ExprTuple, FnArg, Ident, ItemTrait, LitBool, Path, Token, TraitItem,
 };
 
 use crate::shared::{dyn_ident, snake_case, Version};
@@ -32,7 +32,7 @@ impl Parse for ApiDefineAttr {
             } else {
                 api_trait_paths.push(input.parse()?);
             }
-            
+
             if !input.is_empty() {
                 let _: Token![,] = input.parse()?;
             }
@@ -47,7 +47,10 @@ impl Parse for ApiDefineAttr {
 
 pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
-    let ApiDefineAttr { api_trait_paths, skip_castable } = parse_macro_input!(attr as ApiDefineAttr);
+    let ApiDefineAttr {
+        api_trait_paths,
+        skip_castable,
+    } = parse_macro_input!(attr as ApiDefineAttr);
 
     assert_eq!(api_trait_paths.len(), 1, "Only 1 path permitted");
 

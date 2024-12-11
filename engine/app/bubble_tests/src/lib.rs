@@ -7,7 +7,10 @@ use std::{
 
 use bubble_core::{
     api::{
-        api_registry_api::get_api_registry_api, plugin_api::PluginApi, prelude::{ApiHandle, ApiRegistryApi}, Api, ApiConstant
+        api_registry_api::get_api_registry_api,
+        plugin_api::PluginApi,
+        prelude::{ApiHandle, ApiRegistryApi},
+        Api, ApiConstant,
     },
     sync::circ,
     tracing,
