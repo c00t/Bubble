@@ -13,6 +13,7 @@ members = [
     "circ_ds",
     "bubble_basin",
     "bubble_tests",
+    "bubble_fs",
 ]
 resolver = "2"
 

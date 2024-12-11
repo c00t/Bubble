@@ -1,0 +1,28 @@
+[package]
+name = "bubble-fs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dunce = "1.0.5"
+dyntls = { path = "../dyntls" }
+either = "1.13.0"
+path-slash = "0.2.1"
+serde = { version = "1.0.216", optional = true }
+bubble-tasks = { path = "../bubble_tasks", optional = true}
+urlencoding = "2.1.3"
+fs-err = "3.0.0"
+junction = "1.2.0"
+bubble-core = { path = "../bubble_core" }
+tempfile = "3.14.0"
+# backoff = { version = "0.4.0", features = ["futures", "async-std"] }
+fs2 = "0.4.3"
+backon = { version = "1.3.0", default-features = false, features = ["std-blocking-sleep"] }
+
+[dev-dependencies]
+dyntls-host = { path = "../dyntls_host" }
+
+[features]
+default = ["bubble-tasks"]
+serde = ["dep:serde"]
+bubble-tasks = ["dep:bubble-tasks"]
