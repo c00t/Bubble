@@ -1,12 +1,12 @@
 use std::hash::BuildHasher;
 
-use super::{BasinBufferApi, Buffer, BufferId, BufferStorage};
+use super::{BasinBufferInterface, Buffer, BufferId, BufferStorage};
 use __fixed_type_id::{fstr_to_str, ConstTypeName};
 use bubble_core::api::prelude::*;
 use circ::Rc;
 use quick_cache::{Lifecycle, Weighter};
 
-impl<We, B, L> TraitcastableTo<dyn Api> for BufferStorage<We, B, L>
+impl<We, B, L> TraitcastableTo<dyn Interface> for BufferStorage<We, B, L>
 where
     We: Weighter<BufferId, Rc<Buffer>> + FixedTypeId + Clone + Send + Sync + 'static,
     B: BuildHasher + FixedTypeId + Clone + Send + Sync + 'static,
@@ -17,16 +17,16 @@ where
         + Sync
         + 'static,
 {
-    const METADATA: std::ptr::DynMetadata<dyn Api> = {
+    const METADATA: std::ptr::DynMetadata<dyn Interface> = {
         let ptr: *const BufferStorage<We, B, L> =
             ::core::ptr::from_raw_parts(::core::ptr::null::<BufferStorage<We, B, L>>(), ());
-        let ptr: *const dyn Api = ptr as _;
+        let ptr: *const dyn Interface = ptr as _;
 
         ptr.to_raw_parts().1
     };
 }
 
-impl<We, B, L> TraitcastableTo<dyn BasinBufferApi> for BufferStorage<We, B, L>
+impl<We, B, L> TraitcastableTo<dyn BasinBufferInterface> for BufferStorage<We, B, L>
 where
     We: Weighter<BufferId, Rc<Buffer>> + FixedTypeId + Clone + Send + Sync + 'static,
     B: BuildHasher + FixedTypeId + Clone + Send + Sync + 'static,
@@ -37,10 +37,10 @@ where
         + Sync
         + 'static,
 {
-    const METADATA: std::ptr::DynMetadata<dyn BasinBufferApi> = {
+    const METADATA: std::ptr::DynMetadata<dyn BasinBufferInterface> = {
         let ptr: *const BufferStorage<We, B, L> =
             ::core::ptr::from_raw_parts(::core::ptr::null::<BufferStorage<We, B, L>>(), ());
-        let ptr: *const dyn BasinBufferApi = ptr as _;
+        let ptr: *const dyn BasinBufferInterface = ptr as _;
 
         ptr.to_raw_parts().1
     };
@@ -58,8 +58,8 @@ where
         + 'static,
 {
     const TARGETS: &[TraitcastTarget] = &[
-        TraitcastTarget::from::<Self, dyn Api>(),
-        TraitcastTarget::from::<Self, dyn BasinBufferApi>(),
+        TraitcastTarget::from::<Self, dyn Interface>(),
+        TraitcastTarget::from::<Self, dyn BasinBufferInterface>(),
     ];
 }
 

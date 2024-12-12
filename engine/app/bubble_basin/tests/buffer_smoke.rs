@@ -6,8 +6,8 @@ use std::{
 };
 
 use bubble_basin::buffer::{
-    BasinBufferApi, Buffer, BufferAsyncResult, BufferEvictionLifeCycle, BufferId, BufferObject,
-    BufferOptions, BufferStorage, LayeredLifecycle,
+    BasinBufferInterface, Buffer, BufferAsyncResult, BufferEvictionLifeCycle, BufferId,
+    BufferObject, BufferOptions, BufferStorage, LayeredLifecycle,
 };
 use bubble_core::{
     api::{api_registry_api, prelude::*},
@@ -46,7 +46,7 @@ fixed_type_id_without_version_hash! {
 pub fn smoke() {
     let test_skeleton = TestSkeleton::new();
     let data_slab = Arc::new(Slab::new());
-    let (buffer_api, disk_cache, data_slab) = create_test_buffer_api(
+    let (buffer_interface, disk_cache, data_slab) = create_test_buffer_api(
         data_slab.clone(),
         10,
         160 * 1024 * 1024,
@@ -55,14 +55,14 @@ pub fn smoke() {
         RapidInlineBuildHasher::default(),
         BufferEvictionLifeCycle::new(data_slab),
     );
-    test_skeleton.add_api_to_registry(buffer_api.clone());
+    // test_skeleton.add_api_to_registry(buffer_api.clone());
 
     // prepare data
     let (memory_buffers, local_storage_buffers) =
         prepare_raw_data(20, 10 * 1024 * 1024, 20, 10 * 1024 * 1024);
     let spilt_point = 20;
     let buffer_options = prepare_buffer_options(memory_buffers, &local_storage_buffers);
-    let buffer_ids = add_buffers_to_storage(buffer_options, buffer_api.clone());
+    let buffer_ids = add_buffers_to_storage(buffer_options, buffer_interface.clone());
 
     tracing::info!(
         "End of prepare data, total buffer count: {}",
@@ -95,13 +95,13 @@ pub fn smoke() {
         // 1. move from memory to local storage
         let temp_paths = test_to_local_storage_async(
             test_skeleton.task_system_api.clone(),
-            buffer_api.clone(),
+            buffer_interface.clone(),
             buffer_ids.clone(),
         );
         // 2. test buffer get async
         test_buffer_get_async(
             test_skeleton.task_system_api.clone(),
-            buffer_api.clone(),
+            buffer_interface.clone(),
             buffer_ids,
         );
         temp_paths
@@ -126,7 +126,7 @@ pub fn smoke() {
     let regular_log_info = RegularLogInfo::new(disk_cache.clone(), data_slab.clone());
     run_async_runtime(
         test_skeleton.task_system_api.clone(),
-        buffer_api.clone(),
+        buffer_interface.clone(),
         regular_log_info,
     );
     drop(local_storage_buffers);
@@ -262,7 +262,7 @@ fn prepare_buffer_options(
 /// the temp paths should be returned to prevent the temp file from being deleted
 fn test_to_local_storage_async(
     task_system_api: ApiHandle<dyn TaskSystemApi>,
-    buffer_api: ApiHandle<dyn BasinBufferApi>,
+    buffer_api: InterfaceHandle<dyn BasinBufferInterface>,
     buffer_ids: Vec<BufferId>,
 ) -> Vec<TempPath> {
     let guard = circ::cs();
@@ -310,7 +310,7 @@ fn test_to_local_storage_async(
 /// The temp paths should be returned to prevent the temp file from being deleted
 fn test_to_local_storage(
     task_system_api: ApiHandle<dyn TaskSystemApi>,
-    buffer_api: ApiHandle<dyn BasinBufferApi>,
+    buffer_api: InterfaceHandle<dyn BasinBufferInterface>,
     buffer_ids: Vec<BufferId>,
 ) -> Vec<TempPath> {
     let guard = circ::cs();
@@ -357,7 +357,7 @@ fn test_to_local_storage(
 /// Vec<memory buffers first, then local storage buffers>
 fn add_buffers_to_storage(
     buffer_options: Vec<BufferOptions>,
-    buffer_api: ApiHandle<dyn BasinBufferApi>,
+    buffer_api: InterfaceHandle<dyn BasinBufferInterface>,
 ) -> Vec<BufferId> {
     let cs = circ::cs();
     let local_buffer_api = buffer_api.get(&cs).unwrap();
@@ -378,7 +378,7 @@ fn create_test_buffer_api<W, H, L>(
     hasher: H,
     life_cycle: L,
 ) -> (
-    ApiHandle<dyn BasinBufferApi>,
+    InterfaceHandle<dyn BasinBufferInterface>,
     Arc<Cache<BufferId, Rc<Buffer>, W, H, L>>,
     Arc<Slab<BufferObject>>,
 )
@@ -402,7 +402,7 @@ where
         hasher,
         life_cycle,
     ));
-    let buffer_api: AnyApiHandle = Box::new(BufferStorage {
+    let buffer_api: AnyInterfaceHandle = Box::new(BufferStorage {
         task_system: task_system_api,
         data: data_slab.clone(),
         disk_cache: disk_cache.clone(),
@@ -413,7 +413,7 @@ where
 
 /// Test buffer get() using std::thread
 fn test_buffer_get_with_threads(
-    buffer_api: ApiHandle<dyn BasinBufferApi>,
+    buffer_api: InterfaceHandle<dyn BasinBufferInterface>,
     buffer_ids: Vec<BufferId>,
 ) {
     let mut handles = vec![];
@@ -455,7 +455,7 @@ fn test_buffer_get_with_threads(
 /// Test buffer get() using task system
 fn test_buffer_get(
     task_system_api: ApiHandle<dyn TaskSystemApi>,
-    buffer_api: ApiHandle<dyn BasinBufferApi>,
+    buffer_api: InterfaceHandle<dyn BasinBufferInterface>,
     buffer_ids: Vec<BufferId>,
 ) {
     let guard = circ::cs();
@@ -489,7 +489,7 @@ fn test_buffer_get(
 /// Test buffer get_snapshot() using task system
 fn test_buffer_get_snapshot(
     task_system_api: ApiHandle<dyn TaskSystemApi>,
-    buffer_api: ApiHandle<dyn BasinBufferApi>,
+    buffer_api: InterfaceHandle<dyn BasinBufferInterface>,
     buffer_ids: Vec<BufferId>,
 ) {
     let guard = circ::cs();
@@ -528,7 +528,7 @@ fn test_buffer_get_snapshot(
 /// Test buffer get_async() using task system
 fn test_buffer_get_async(
     task_system_api: ApiHandle<dyn TaskSystemApi>,
-    buffer_api: ApiHandle<dyn BasinBufferApi>,
+    buffer_api: InterfaceHandle<dyn BasinBufferInterface>,
     buffer_ids: Vec<BufferId>,
 ) {
     let guard = circ::cs();
@@ -614,7 +614,7 @@ where
 
 fn run_async_runtime<W, H, L>(
     task_system_api: ApiHandle<dyn TaskSystemApi>,
-    buffer_api: ApiHandle<dyn BasinBufferApi>,
+    buffer_api: InterfaceHandle<dyn BasinBufferInterface>,
     regular_log_info: RegularLogInfo<W, H, L>,
 ) where
     W: Weighter<BufferId, Rc<Buffer>> + Clone + Send + Sync + 'static,

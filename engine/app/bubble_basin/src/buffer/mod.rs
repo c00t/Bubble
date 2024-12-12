@@ -17,7 +17,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use bon::{bon, builder};
 use bubble_core::api::prelude::*;
 use bubble_core::sync::circ::{AtomicRc, RcObject};
 use bubble_core::tracing;
@@ -38,14 +37,14 @@ use url::Url;
 
 /// The storage of the buffer.
 ///
-/// Implement [`BasinBufferApi`], which is the public api of the buffer storage.
+/// Implement [`BasinBufferInterface`], which is the public interface of the buffer storage.
 ///
 /// The eviction of the buffer backed by external storage(like local storage or url)
 /// is handled by [`quick_cache`], when the quick_cache decides to evict a buffer, it will
 /// remove the buffer from the internal storage.
 ///
 /// The weight, hashbuilder and lifecycle type will be implemented by user.
-#[define_api(bubble_basin::buffer::BasinBufferApi, skip_castable = true)]
+#[define_interface(bubble_basin::buffer::BasinBufferInterface, skip_castable = true)]
 pub struct BufferStorage<We, B, L>
 where
     We: Weighter<BufferId, Rc<Buffer>> + FixedTypeId + Clone + Send + Sync + 'static,
@@ -417,8 +416,8 @@ pub enum BufferAsyncSnapshotResult<'g> {
     Loading(oneshot::Receiver<Option<Snapshot<'g, Buffer>>>),
 }
 
-#[declare_api((0,1,0), bubble_basin::buffer::BasinBufferApi)]
-pub trait BasinBufferApi: Api {
+#[declare_interface((0,1,0), bubble_basin::buffer::BasinBufferInterface)]
+pub trait BasinBufferInterface: Interface {
     /// Add a buffer to the storage, and return the id of the buffer.
     ///
     /// It will return a runtime id. Currently, this api supports 3 kinds of buffer options:
@@ -504,7 +503,7 @@ pub trait BasinBufferApi: Api {
     fn load(&self, id: BufferId);
 }
 
-impl<We, B, L> BasinBufferApi for BufferStorage<We, B, L>
+impl<We, B, L> BasinBufferInterface for BufferStorage<We, B, L>
 where
     We: Weighter<BufferId, Rc<Buffer>> + FixedTypeId + Clone + Send + Sync + 'static,
     B: BuildHasher + FixedTypeId + Clone + Send + Sync + 'static,
