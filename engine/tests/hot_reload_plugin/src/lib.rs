@@ -1,10 +1,10 @@
 #![feature(ptr_metadata)]
 #![feature(downcast_unchecked)]
+use bon::{bon, builder};
 use bubble_core::api::{plugin_api::prelude::*, prelude::*};
 use bubble_core::sync::circ;
 use hot_reload_plugin_types::{DynHotReloadTestApi, HotReloadTestApi};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use bon::{bon, builder};
 
 /// API implementation for testing hot reload functionality
 #[define_api(HotReloadTestApi)]
