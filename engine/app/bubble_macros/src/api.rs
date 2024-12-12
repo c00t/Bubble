@@ -91,26 +91,6 @@ pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     });
 
-    // Generate register functions for all trait paths
-    let register_fns = api_trait_paths.iter().map(|path| {
-        let last_segment = path.segments.last()
-            .expect("API trait path should have at least one segment");
-        let api_trait_last_path = &last_segment.ident;
-        let local_api_handle = format_ident!("{}Handle", api_trait_last_path);
-        let dyn_type_ident = dyn_ident(&last_segment.ident);
-        quote! {
-            pub struct #local_api_handle<'local> {
-                api: LocalApiHandle<'local, #dyn_type_ident>
-            }
-
-            impl<'local> From<LocalApiHandle<'local, #dyn_type_ident>> for #local_api_handle<'local> {
-                fn from(api: LocalApiHandle<'local, #dyn_type_ident>) -> Self {
-                    Self { api }
-                }
-            }
-        }
-    });
-
     // Conditionally include the make_trait_castable attribute
     let trait_castable = if !skip_castable {
         quote! {
@@ -125,8 +105,6 @@ pub fn define_api(attr: TokenStream, item: TokenStream) -> TokenStream {
         #input
 
         #(#impl_api_calls)*
-
-        #(#register_fns)*
     };
 
     TokenStream::from(expanded)
@@ -202,6 +180,13 @@ pub fn declare_api(args: TokenStream, item: TokenStream) -> TokenStream {
         })
         .collect::<Vec<_>>();
 
+    let api_trait_last_path = &path
+        .segments
+        .last()
+        .expect("API trait path should have at least one segment")
+        .ident;
+    let local_api_handle = format_ident!("{}Handle", api_trait_last_path);
+
     let expanded = quote! {
         // pub(crate) mod #constant_mod_ident {
         //     use super::Version;
@@ -232,6 +217,16 @@ pub fn declare_api(args: TokenStream, item: TokenStream) -> TokenStream {
 
         impl<T: #trait_ident + ?Sized> #trait_ident for Box<T> {
             #(#methods)*
+        }
+
+        pub struct #local_api_handle<'local> {
+            api: LocalApiHandle<'local, #dyn_type_ident>
+        }
+
+        impl<'local> From<LocalApiHandle<'local, #dyn_type_ident>> for #local_api_handle<'local> {
+            fn from(api: LocalApiHandle<'local, #dyn_type_ident>) -> Self {
+                Self { api }
+            }
         }
 
         #input

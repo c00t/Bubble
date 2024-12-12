@@ -4,7 +4,7 @@ use syn::{
     parse::{Parse, ParseStream},
     parse_macro_input, parse_quote,
     punctuated::Punctuated,
-    DeriveInput, ExprTuple, FnArg, ItemTrait, Path, Token, TraitItem,
+    DeriveInput, ExprTuple, FnArg, Ident, ItemTrait, LitBool, Path, Token, TraitItem,
 };
 
 use crate::shared::{dyn_ident, snake_case, Version};
@@ -29,16 +29,37 @@ impl Parse for InterfaceDefineAttrWithVersion {
 }
 
 struct InterfaceDefineAttr {
-    interface_trait_paths: Punctuated<Path, Token![,]>,
+    interface_trait_paths: Vec<Path>,
+    skip_castable: bool,
 }
 
 impl Parse for InterfaceDefineAttr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        // Parse one or more trait paths separated by commas
-        let interface_trait_paths = Punctuated::parse_terminated(input)?;
+        let mut interface_trait_paths = Vec::new();
+        let mut skip_castable = false;
+
+        while !input.is_empty() {
+            if input.peek(Ident) && input.peek2(Token![=]) {
+                let ident: Ident = input.parse()?;
+                let _eq_token: Token![=] = input.parse()?;
+                match ident.to_string().as_str() {
+                    "skip_castable" => {
+                        skip_castable = input.parse::<LitBool>()?.value;
+                    }
+                    _ => return Err(syn::Error::new(ident.span(), "Unknown attribute key")),
+                }
+            } else {
+                interface_trait_paths.push(input.parse()?);
+            }
+
+            if !input.is_empty() {
+                let _: Token![,] = input.parse()?;
+            }
+        }
 
         Ok(InterfaceDefineAttr {
             interface_trait_paths,
+            skip_castable,
         })
     }
 }
@@ -48,6 +69,7 @@ pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
     let InterfaceDefineAttr {
         // instance_version,
         interface_trait_paths,
+        skip_castable,
     } = parse_macro_input!(attr as InterfaceDefineAttr);
 
     assert_eq!(interface_trait_paths.len(), 1, "Only 1 path permitted");
@@ -66,6 +88,9 @@ pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
         })
         .collect();
 
+    let generics = &input.generics;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
     // Generate impl_interface! calls for all trait paths
     let impl_interface_calls = interface_trait_paths.iter().map(|path| {
         let last_segment = path
@@ -73,7 +98,7 @@ pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
             .last()
             .expect("Interface trait path should have at least one segment");
         quote! {
-            impl self::Interface for #struct_name {
+            impl #impl_generics self::Interface for #struct_name #ty_generics #where_clause {
                 #[inline]
                 fn name(&self) -> &'static str {
                     <dyn #last_segment as InterfaceConstant>::NAME
@@ -88,32 +113,21 @@ pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
 
-            impl self::InterfaceInstanceConstant for #struct_name {
+            impl #impl_generics self::InterfaceInstanceConstant for #struct_name #ty_generics #where_clause {
                 const INSTANCE_NAME: &'static str = <Self as self::FixedTypeId>::TYPE_NAME;
                 const INSTANCE_ID: self::FixedId = <Self as self::FixedTypeId>::TYPE_ID;
             }
         }
     });
 
-    // Generate register functions for all trait paths
-    let register_fns = interface_trait_paths.iter().map(|path| {
-        let last_segment = path.segments.last()
-            .expect("Interface trait path should have at least one segment");
-        let interface_trait_last_path = &last_segment.ident;
-        let register_interface_fn_name = format_ident!("register_{}", snake_case(&struct_name.to_string()));
-        let doc_comment = format!("Register one {} instance into the API registry", interface_trait_last_path);
-        let dyn_type_ident = dyn_ident(&last_segment.ident);
+    // Conditionally include the make_trait_castable attribute
+    let trait_castable = if !skip_castable {
         quote! {
-            #[doc = #doc_comment]
-            pub fn #register_interface_fn_name(api_registry_api: &ApiHandle<dyn ApiRegistryApi>, dep_id: Option<DepId>) -> InterfaceHandle<dyn #interface_trait_last_path> {
-                let guard = circ::cs();
-                api_registry_api
-                    .get(&guard)
-                    .expect("Failed to get API registry api")
-                    .local_add_interface::<#dyn_type_ident>(#struct_name::builder().build().into(), dep_id)
-            }
+            #[make_trait_castable(Interface, #(#trait_segments),*)]
         }
-    });
+    } else {
+        quote! {}
+    };
 
     let expanded;
     // if let Some(instance_version) = instance_version {
@@ -132,12 +146,10 @@ pub fn define_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
     expanded = quote! {
         // it make that when compile multiple times, the input's TYPE_ID is different
         // #[make_trait_castable_random_self_id(Interface, #(#trait_segments),*)]
-        #[make_trait_castable(Interface, #(#trait_segments),*)]
+        #trait_castable
         #input
 
         #(#impl_interface_calls)*
-
-        #(#register_fns)*
     };
     // }
 
@@ -215,16 +227,14 @@ pub fn declare_interface(args: TokenStream, item: TokenStream) -> TokenStream {
         })
         .collect::<Vec<_>>();
 
+    let interface_trait_last_path = &path
+        .segments
+        .last()
+        .expect("Interface trait path should have at least one segment")
+        .ident;
+    let local_interface_handler = format_ident!("{}Handle", interface_trait_last_path);
+
     let expanded = quote! {
-        // pub(crate) mod #constant_mod_ident {
-        //     use super::Version;
-        //     pub const NAME: &'static str = ::std::stringify!(#path);
-        //     pub const VERSION: self::Version = self::Version::new(
-        //         #major,
-        //         #minor,
-        //         #patch
-        //     );
-        // }
 
         impl InterfaceConstant for #dyn_type_ident {
             const NAME: &'static str = <#dyn_type_ident as FixedTypeId>::TYPE_NAME;
@@ -245,6 +255,16 @@ pub fn declare_interface(args: TokenStream, item: TokenStream) -> TokenStream {
 
         impl<T: #trait_ident + ?Sized> #trait_ident for Box<T> {
             #(#methods)*
+        }
+
+        pub struct #local_interface_handler<'local> {
+            api: LocalInterfaceHandle<'local, #dyn_type_ident>
+        }
+
+        impl<'local> From<LocalInterfaceHandle<'local, #dyn_type_ident>> for #local_interface_handler<'local> {
+            fn from(api: LocalInterfaceHandle<'local, #dyn_type_ident>) -> Self {
+                Self { api }
+            }
         }
 
         #input
