@@ -24,6 +24,8 @@ bon = "2.3.0"
 tracing = { path = "../../third-party/vendor/tracing/tracing" }
 sharded-slab = { path = "../../third-party/vendor/sharded-slab" }
 rapidhash = { version = "1.1.0", features = ["rand", "rng"] }
+# disable default features for atomic, it's use static spinlock array to emulate atomic operations, vendor it if needed (eg. mipsel-sony-psx)
+atomic = {version = "0.5", default-features = false}
 
 [dev-dependencies]
 dyntls-host = { path = "../dyntls_host" }

@@ -1,10 +1,12 @@
 use std::ops::Deref;
 
 pub use circ;
+pub use atomic;
+
 use circ::{Rc, RcObject};
 
 /// A common wrapper for types that doesn't contain any Rc edges, because you can't create a name for them.
-pub(crate) struct NoLinkWrap<T>(pub(crate) T);
+pub struct NoLinkWrap<T>(pub(crate) T);
 
 impl<T> Deref for NoLinkWrap<T> {
     type Target = T;
