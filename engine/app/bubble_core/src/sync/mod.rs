@@ -1,7 +1,7 @@
 use std::ops::Deref;
 
-pub use circ;
 pub use atomic;
+pub use circ;
 
 use circ::{Rc, RcObject};
 

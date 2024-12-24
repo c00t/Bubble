@@ -6,7 +6,7 @@
 //! All hashers in this module implement [`fixed_type_id::FixedTypeId`].
 //!
 
-use crate::api::prelude::__fixed_type_id::*;
+use crate::api::prelude::*;
 /// Re-export of [`rapidhash`] for convenience.
 pub use rapidhash::{self, RapidHasher, RapidInlineHasher};
 

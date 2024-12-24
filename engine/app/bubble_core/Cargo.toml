@@ -16,7 +16,7 @@ dyntls-host = { path = "../dyntls_host", optional = true}
 circ = { path = "../../third-party/vendor/circ"}
 circ-ds = {path = "../circ_ds"}
 trait_cast_rs = { path = "../../third-party/vendor/trait_cast_rs/trait_cast_rs" }
-fixed-type-id = { version = "0.1.2" }
+fixed-type-id = { version = "0.2.0" }
 bubble-macros = { workspace = true }
 anyhow = "1.0.90"
 thiserror = "1.0.64"

@@ -7,10 +7,7 @@ pub use trait_cast_rs::{
     TraitcastableAny, TraitcastableAnyInfra, TraitcastableAnyInfraExt, TraitcastableTo,
 };
 
-pub use fixed_type_id::{
-    fixed_type_id, fixed_type_id_without_version_hash, random_fixed_type_id, FixedId, FixedTypeId,
-    FixedVersion,
-};
+pub use fixed_type_id::{prelude::*, type_id, type_name, type_version};
 
 mod interfaces;
 
@@ -147,19 +144,15 @@ pub mod prelude {
         LocalApiHandle, LocalInterfaceHandle,
     };
     pub use super::{
-        declare_api, declare_interface, define_api, define_interface, fixed_type_id,
-        fixed_type_id_without_version_hash, make_trait_castable, make_trait_castable_decl,
-        make_trait_castable_decl_random_self_id, make_trait_castable_decl_with_version,
-        make_trait_castable_random_self_id, random_fixed_type_id, Api, ApiConstant, FixedId,
-        FixedTypeId, FixedVersion, Interface, InterfaceConstant, InterfaceInstanceConstant,
-        TraitcastTarget, TraitcastableAny, TraitcastableAnyInfra, TraitcastableAnyInfraExt,
-        TraitcastableTo, Version,
+        declare_api, declare_interface, define_api, define_interface, Api, ApiConstant, Interface,
+        InterfaceConstant, InterfaceInstanceConstant,
     };
-    pub mod __fixed_type_id {
-        pub use fixed_type_id::{
-            fixed_type_id, fixed_type_id_without_version_hash, random_fixed_type_id,
-        };
-        pub use fixed_type_id::{fstr_to_str, ConstTypeName, FixedId, FixedTypeId, FixedVersion};
-    }
     pub use crate::sync::circ;
+    pub use fixed_type_id::prelude::*;
+    pub use semver::Version;
+    pub use trait_cast_rs::{
+        make_trait_castable, make_trait_castable_decl, make_trait_castable_decl_random_self_id,
+        make_trait_castable_decl_with_version, make_trait_castable_random_self_id, TraitcastTarget,
+        TraitcastableAny, TraitcastableAnyInfra, TraitcastableAnyInfraExt, TraitcastableTo,
+    };
 }

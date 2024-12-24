@@ -210,8 +210,9 @@ pub fn declare_api(args: TokenStream, item: TokenStream) -> TokenStream {
 
         pub type #dyn_type_ident = dyn #trait_ident;
 
-        fixed_type_id_without_version_hash! {
-            #[FixedTypeIdVersion((#major, #minor, #patch))]
+        fixed_type_id! {
+            #[version((#major, #minor, #patch))]
+            #[omit_version_hash]
             dyn #path
         }
 
